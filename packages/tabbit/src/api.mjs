@@ -153,6 +153,28 @@ export function stale(auth, skewMs = 60_000) {
   return claims.exp * 1000 - skewMs <= Date.now()
 }
 
+// uniqueUuid builds the `unique-uuid` the Tabbit web app sends, the way it
+// builds it: 32 hex digits, the unix time in seconds spread over fixed
+// positions, and position 5 the "Tabbit is the default browser" marker. The
+// browser writes "1" there only when it really is the default browser, which
+// Tabbit counts toward Pro; this always writes something else, so a request
+// never claims that. Pro models aren't offered by this plugin anyway.
+const MARKER_POS = 5
+const TIME_POS = [2, 7, 11, 14, 18, 21, 25, 28]
+export function uniqueUuid(now = Date.now(), random = Math.random) {
+  const hex = "0123456789abcdef"
+  const notDefault = hex.replace("1", "")
+  const time = Math.floor(now / 1000).toString(16).padStart(8, "0").slice(-8)
+  let out = ""
+  for (let i = 0; i < 32; i++) {
+    const t = TIME_POS.indexOf(i)
+    if (i === MARKER_POS) out += notDefault[Math.floor(random() * notDefault.length)]
+    else if (t >= 0) out += time[t]
+    else out += hex[Math.floor(random() * hex.length)]
+  }
+  return [out.slice(0, 8), out.slice(8, 12), out.slice(12, 16), out.slice(16, 20), out.slice(20)].join("-")
+}
+
 function headersFor(creds, site, extra) {
   return {
     cookie: creds.header,
@@ -160,10 +182,9 @@ function headersFor(creds, site, extra) {
     "user-agent": UA,
     // web.tabbit.ai's browser sign-in gate (429 code 492 "Welcome to Tabbit
     // Browser") refuses a turn whose request carries no `unique-uuid`: the
-    // browser sends a fresh uuid on every API call, and the gate accepts any
-    // well-formed one. Measured against a live signed-in session on .ai;
-    // .com ignores the header.
-    "unique-uuid": crypto.randomUUID(),
+    // browser sends a fresh one on every API call. Measured against a live
+    // signed-in session on .ai; .com ignores the header.
+    "unique-uuid": uniqueUuid(),
     origin: site,
     referer: `${site}/newtab`,
     ...extra,

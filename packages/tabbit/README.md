@@ -60,9 +60,11 @@ before). A `web.tabbit.com` token never asks `web.tabbit.ai` anything.
 > **International site, chat turns:** `web.tabbit.ai` answers a turn's
 > `runs` call with `429`, code `492` ("Welcome to Tabbit Browser...") unless
 > the request carries a `unique-uuid` header — the browser sends a fresh
-> uuid on every API call, and the gate accepts any well-formed one (a
-> net-export capture of Tabbit Browser's own traffic showed the header on
-> `runs`, `join` and `usage`). The plugin sends one per call (#834).
+> one on every API call (a net-export capture of Tabbit Browser's own
+> traffic showed the header on `runs`, `join` and `usage`). The plugin sends
+> one per call (#834), built the way the web app builds it: the time in
+> seconds at fixed positions, and digit 5 — the web app's "Tabbit is the
+> default browser" marker, which Tabbit counts toward Pro — never set.
 
 There is no refresh endpoint. When the token runs out (7 days), magpie shows
 the account as needing a sign-in again and the first method takes one more
