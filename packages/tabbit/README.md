@@ -179,6 +179,34 @@ answers the last question with the earlier turns as context.
 
 `maxConcurrency` is **1**: Tabbit answers one turn at a time.
 
+**The 20,000-character turn cap.** Tabbit refuses a turn whose `content` is
+longer than 20,000 characters. The web app checks it before sending
+(`plainText.length > 2e4` → "too-long"), and the server enforces the same line:
+on `web.tabbit.ai` a turn of 19,970 characters is queued, while one of 20,900
+comes back as `429`, code `492` ("Welcome to Tabbit Browser..."), which is the
+same answer the sign-in gate gives. The cap counts characters, not bytes:
+19,800 CJK characters (about 59 KB of JSON) were accepted. An agent's first
+request (system prompt plus a few dozen tools) is well past it, so the plugin
+handles it in two ways:
+
+- **Compact tool signatures.** Each tool's arguments go into the prompt as a
+  TypeScript-style object type (`path: string // Path to read.`, `limit?: number`),
+  not as stringified JSON Schema. Every description, enum, default and bound is
+  kept; JSON punctuation and keywords such as `$schema` and
+  `additionalProperties: false` are dropped.
+- **Long prompts sent in parts.** A prompt that is still past the cap is cut on
+  paragraph or line breaks into parts of at most 18,000 characters
+  (`TABBIT_PART_CHARS` changes this). The parts are sent as consecutive turns of
+  the same room, each one hung off the previous answer. Every part except the
+  last asks the model to reply only `ACK`, and the last part asks for the
+  answer. In a live test, three parts of about 18k characters went into one
+  room, and the last turn answered with facts that appeared only in parts 1 and 2.
+  Each earlier part is read to its end because a room takes one run at a time:
+  stopping a part early made the next one fail with `409` "already has an active
+  room run". Each part costs one short turn, roughly 10 seconds. Follow-ups in
+  the same session only send the new messages, so the parts are sent once per
+  room.
+
 ## Working on this package
 
 From a checkout of this source tree, or from the published package:
@@ -211,7 +239,8 @@ synthetic Chromium `v10` blob.
 - A turn is a web-app turn: first text takes seconds, and one turn runs at a
   time.
 - Tabbit keeps the room's own history, so a flattened prompt is the fallback
-  path, not the normal one. Very long transcripts past the model's limit are
-  Tabbit's call, and it answers with its own error.
+  path, not the normal one. A flattened prompt past the 20,000-character turn
+  cap is sent in parts (see above); a transcript past the model's own context
+  limit is Tabbit's call, and Tabbit answers with its own error.
 - The catalog call answers without a valid token; a token that has really
   expired shows up at the first turn (`401 请先登录`), which marks the account.

@@ -25,13 +25,66 @@ export function partText(content) {
   return parts.join("\n")
 }
 
+// Tool arguments are written as a TypeScript-like signature, not the raw JSON
+// Schema: a turn is capped at 20,000 characters (see chunk.mjs), and an
+// agent's few dozen schemas, stringified, are most of a first request. The
+// signature keeps what the model needs to call a tool — names, types,
+// optionality, enums, defaults and every description — and drops the JSON
+// punctuation and the schema keywords that carry nothing for it.
+const IDENT = /^[A-Za-z_$][\w$]*$/
+const keyOf = (k) => (IDENT.test(k) ? k : JSON.stringify(k))
+const oneLine = (s) => String(s ?? "").replace(/\s*\n\s*/g, " ").trim()
+
+export function typeOf(schema, depth = 0, indent = 0) {
+  if (schema === true || schema == null) return "any"
+  if (schema === false) return "never"
+  if (typeof schema !== "object") return "any"
+  if (depth > 8) return "any"
+  if (schema.const !== undefined) return JSON.stringify(schema.const)
+  if (Array.isArray(schema.enum)) return schema.enum.map((v) => JSON.stringify(v)).join(" | ") || "never"
+  const union = schema.oneOf ?? schema.anyOf
+  if (Array.isArray(union)) return union.map((s) => typeOf(s, depth + 1, indent)).join(" | ") || "any"
+  if (Array.isArray(schema.allOf)) return schema.allOf.map((s) => typeOf(s, depth + 1, indent)).join(" & ") || "any"
+  const t = schema.type
+  if (Array.isArray(t)) return t.map((one) => typeOf({ ...schema, type: one }, depth + 1, indent)).join(" | ")
+  if (t === "array" || (!t && schema.items)) {
+    const inner = typeOf(schema.items, depth + 1, indent)
+    return /[|&\s]/.test(inner) && !inner.startsWith("{") ? `(${inner})[]` : `${inner}[]`
+  }
+  if (t === "object" || (!t && schema.properties)) return objectOf(schema, depth, indent)
+  if (t === "integer") return "integer"
+  if (t === "string" || t === "number" || t === "boolean" || t === "null") return t
+  return "any"
+}
+
+function objectOf(schema, depth, indent) {
+  const props = schema.properties && typeof schema.properties === "object" ? schema.properties : {}
+  const required = new Set(Array.isArray(schema.required) ? schema.required : [])
+  const fields = Object.entries(props).map(([k, s]) => {
+    const notes = []
+    const desc = oneLine(s?.description)
+    if (desc) notes.push(desc)
+    if (s && typeof s === "object" && s.default !== undefined) notes.push(`default ${JSON.stringify(s.default)}`)
+    for (const [kw, label] of [["minimum", "min"], ["maximum", "max"], ["minLength", "minLength"], ["maxLength", "maxLength"], ["minItems", "minItems"], ["maxItems", "maxItems"], ["pattern", "pattern"], ["format", "format"]]) {
+      if (s && typeof s === "object" && s[kw] !== undefined) notes.push(`${label} ${typeof s[kw] === "string" ? s[kw] : JSON.stringify(s[kw])}`)
+    }
+    return `${keyOf(k)}${required.has(k) ? "" : "?"}: ${typeOf(s, depth + 1, indent + 1)}${notes.length ? ` // ${notes.join("; ")}` : ""}`
+  })
+  const extra = schema.additionalProperties
+  if (extra && typeof extra === "object") fields.push(`[key: string]: ${typeOf(extra, depth + 1, indent + 1)}`)
+  else if (extra === true && !fields.length) fields.push("[key: string]: any")
+  if (!fields.length) return "{}"
+  const pad = "  ".repeat(indent + 1)
+  return `{\n${fields.map((f) => pad + f).join("\n")}\n${"  ".repeat(indent)}}`
+}
+
 export function toolSpecOf(tool) {
   const fn = tool?.function ?? tool
   const name = typeof fn?.name === "string" ? fn.name.trim() : ""
   if (!name) return null
   const desc = String(fn.description ?? "").trim()
   const params = fn.parameters ?? fn.input_schema ?? { type: "object", properties: {} }
-  const line = `## ${name}\n${desc ? `${desc}\n` : ""}Arguments (JSON Schema): ${JSON.stringify(params)}`
+  const line = `## ${name}\n${desc ? `${desc}\n` : ""}Arguments: ${typeOf(params)}`
   return { name, line }
 }
 
@@ -86,7 +139,7 @@ export function toolPreamble(specs, ch = {}) {
   ]
   if (ch?.only) lines.push(`IMPORTANT: For this turn you MUST emit a ${OPEN}...${CLOSE} block calling "${ch.only}".`)
   else if (ch?.must) lines.push(`IMPORTANT: For this turn you MUST emit at least one ${OPEN}...${CLOSE} block.`)
-  lines.push(`# Available Client Tools\n\n${specs.map((s) => s.line).join("\n\n")}`)
+  lines.push(`# Available Client Tools\n\nEach tool's arguments are written as a TypeScript-style object type: \`?\` marks an optional field, \`//\` starts that field's description. Send them as a JSON object.\n\n${specs.map((s) => s.line).join("\n\n")}`)
   return lines.join("\n\n")
 }
 

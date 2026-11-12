@@ -32,7 +32,8 @@ import {
   TabbitError,
 } from "./src/api.mjs"
 import { BOOTSTRAP, NPM, CHAT_BASE, rowsOf, allowedModels } from "./src/models.mjs"
-import { turnDeltas } from "./src/sse.mjs"
+import { turnDeltas, readTurn } from "./src/sse.mjs"
+import { splitTurn } from "./src/chunk.mjs"
 import { desktopSignIn } from "./src/cookie.mjs"
 import { checkinOf } from "./src/checkin.mjs"
 import {
@@ -459,7 +460,23 @@ function createPlugin() {
     const plan = planTurn(rooms.get(roomKey), messages, Date.now(), body)
 
     const start = async (roomId, parentMessageId) => {
-      await runTurn(creds, roomId, { content: plan.content, model, parentMessageId, signal: request.signal })
+      // A prompt past Tabbit's per-turn cap goes in as several turns of the
+      // same room (see src/chunk.mjs). Each earlier part is read to its end:
+      // a room takes one run at a time (a part stopped early left the next
+      // one refused with 409 "already has an active room run").
+      const parts = splitTurn(plan.content)
+      let parent = parentMessageId
+      for (const part of parts.slice(0, -1)) {
+        await runTurn(creds, roomId, { content: part, model, parentMessageId: parent, signal: request.signal })
+        const state = await readTurn(await join(creds, roomId, { signal: request.signal }), {
+          signal: request.signal,
+          onTimeout: () => stop(creds, roomId),
+        })
+        if (state?.failed) throw new TabbitError(`Tabbit's turn failed on part of a long prompt: ${JSON.stringify(state.failed).slice(0, 300)}`)
+        if (!state?.completed || !state.assistantMessageId) throw new TabbitError("Tabbit's turn was cut before it finished, on part of a long prompt")
+        parent = state.assistantMessageId
+      }
+      await runTurn(creds, roomId, { content: parts[parts.length - 1], model, parentMessageId: parent, signal: request.signal })
       return await join(creds, roomId, { signal: request.signal })
     }
 
