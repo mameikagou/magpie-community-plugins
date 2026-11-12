@@ -30,18 +30,30 @@ export const DEFAULT_OUTPUT = Number(process.env.TABBIT_OUTPUT || 32768)
 // else keeps the default; an agent that is sent past a real limit gets
 // Tabbit's own error, which magpie reads as a context overflow.
 const LIMITS = {
+  "Gemini-4-Carbon": { context: 1048576, output: 65536 },
+  "Gemini-4-Argon": { context: 1048576, output: 65536 },
   "DeepSeek-V4.1-Flash": { context: 1048576, output: 32768 },
   "DeepSeek-V4-Pro": { context: 1048576, output: 32768 },
+}
+
+// Default model allowlist: only expose overseas Tabbit's Gemini-4-Carbon unless
+// TABBIT_MODELS="all" or a custom comma-separated list is set.
+export const DEFAULT_ONLY_MODELS = ["Gemini-4-Carbon"]
+
+export function allowedModels(raw = process.env.TABBIT_MODELS) {
+  if (typeof raw === "string") {
+    const trimmed = raw.trim()
+    if (trimmed === "*" || trimmed.toLowerCase() === "all") return null
+    const list = trimmed.split(",").map((s) => s.trim()).filter(Boolean)
+    if (list.length) return new Set(list)
+  }
+  return new Set(DEFAULT_ONLY_MODELS)
 }
 
 // A bootstrap list, so the Providers page has something before a sign-in and
 // the check script sees a non-empty config. The live catalog replaces it.
 export const BOOTSTRAP = [
-  { display_name: "Default", supports_images: false, supports_tools: true, support_thinking: true, model_access_type: "free_unlimited", display_multiplier: 0 },
-  { display_name: "DeepSeek-V4.1-Flash", supports_images: true, supports_tools: true, support_thinking: true, model_access_type: "free_metered", display_multiplier: 0.2 },
-  { display_name: "GLM-5.3-Flash", supports_images: true, supports_tools: true, support_thinking: true, model_access_type: "free_metered", display_multiplier: 0.1 },
-  { display_name: "GLM-5.3", supports_images: false, supports_tools: true, support_thinking: true, model_access_type: "free_metered", display_multiplier: 0.6 },
-  { display_name: "Qwen3.8-Max", supports_images: false, supports_tools: true, support_thinking: true, model_access_type: "free_metered", display_multiplier: 0.9 },
+  { display_name: "Gemini-4-Carbon", supports_images: true, supports_tools: true, support_thinking: true, model_access_type: "free_metered", display_multiplier: 1.1 },
 ]
 
 const clean = (v) => (typeof v === "string" ? v.trim() : "")
@@ -74,15 +86,16 @@ export function rowOf(model, { context = DEFAULT_CONTEXT, output = DEFAULT_OUTPU
     name: id,
     api: { id, url: CHAT_BASE, npm: NPM },
     limit,
-    // Tabbit's models all stream and reason; tool calls are Tabbit's own
-    // server tools, so a client tool an agent declares cannot be honoured.
+    // Tabbit's models all stream and reason; client tools are bridged into
+    // the room prompt as <tool_call>{...}</tool_call> blocks and parsed back
+    // into OpenAI tool_calls.
     reasoning,
-    tool_call: false,
+    tool_call: true,
     modalities: { input: image ? ["text", "image"] : ["text"], output: ["text"] },
     capabilities: {
       temperature: true,
       reasoning,
-      toolcall: false,
+      toolcall: true,
       attachment: false,
       input: { text: true, image, audio: false, video: false, pdf: false },
       output: { text: true, image: false, audio: false, video: false, pdf: false },
@@ -96,15 +109,19 @@ export function rowOf(model, { context = DEFAULT_CONTEXT, output = DEFAULT_OUTPU
 }
 
 // rowsOf turns a catalog into { id: row }, the shape config and the models
-// hook both return. Hidden rows are dropped, and so are premium-only rows
-// when the caller asks for the free ones.
-export function rowsOf(models, { freeOnly = false, context, output } = {}) {
+// hook both return. Hidden rows are dropped, premium-only rows are dropped
+// when freeOnly is true, and when `only` is provided (a Set or Array of ids)
+// only matching models are kept.
+export function rowsOf(models, { freeOnly = false, only = null, context, output } = {}) {
+  const allow = only instanceof Set ? only : Array.isArray(only) ? new Set(only) : null
   const out = {}
   for (const model of Array.isArray(models) ? models : []) {
     if (model?.hidden) continue
     if (freeOnly && !isFree(model)) continue
     const row = rowOf(model, { context, output })
-    if (row) out[row.id] = row
+    if (!row) continue
+    if (allow && !allow.has(row.id)) continue
+    out[row.id] = row
   }
   return out
 }

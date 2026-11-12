@@ -28,14 +28,14 @@ test("rowsOf drops hidden models, and premium ones when asked", () => {
   assert.deepEqual(Object.keys(rowsOf(catalog, { freeOnly: true })), ["Default", "DeepSeek-V4.1-Flash"])
 })
 
-test("a row says what an agent may do: reason yes, client tools no", () => {
+test("a row says what an agent may do: reason yes, client tools bridged via prompt", () => {
   const row = rowOf(catalog[1])
   assert.equal(row.id, "DeepSeek-V4.1-Flash")
   assert.equal(row.providerID, "tabbit")
   assert.equal(row.api.npm, "@ai-sdk/openai-compatible")
   assert.equal(row.capabilities.reasoning, true)
-  // Tabbit's tools are server-side; a client-declared tool cannot be honoured.
-  assert.equal(row.capabilities.toolcall, false)
+  assert.equal(row.tool_call, true)
+  assert.equal(row.capabilities.toolcall, true)
   assert.equal(row.capabilities.input.image, true)
   assert.equal(catalog[2].supports_images, true)
 })
@@ -52,13 +52,11 @@ test("known limits win over the default, and the default is used otherwise", () 
   assert.deepEqual(other.limit, { context: 12345, output: 678 })
 })
 
-test("the bootstrap catalog is non-empty and every row is well formed", () => {
-  assert.ok(BOOTSTRAP.length >= 3)
+test("the bootstrap catalog exposes only Gemini-4-Carbon with 1M context", () => {
+  assert.deepEqual(BOOTSTRAP.map((m) => m.display_name), ["Gemini-4-Carbon"])
   const rows = rowsOf(BOOTSTRAP)
-  assert.ok(Object.keys(rows).length >= 3)
-  for (const row of Object.values(rows)) {
-    assert.equal(row.providerID, "tabbit")
-    assert.ok(row.id && row.name)
-    assert.ok(row.limit.context > 0)
-  }
+  assert.deepEqual(Object.keys(rows), ["Gemini-4-Carbon"])
+  assert.equal(rows["Gemini-4-Carbon"].limit.context, 1048576)
+  assert.equal(rows["Gemini-4-Carbon"].limit.output, 65536)
+  assert.equal(rows["Gemini-4-Carbon"].tool_call, true)
 })

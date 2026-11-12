@@ -33,30 +33,31 @@ import crypto from "node:crypto"
 import { execFile } from "node:child_process"
 
 // The two sites a Tabbit account can belong to (see SITES in api.mjs), the
-// Chinese one first. A browser signed in to either keeps the token under
-// that site's host, so the host it was found under names the account's site.
-export const HOSTS = ["web.tabbit.com", "web.tabbit.ai"]
+// international one first (Tabbit.app -> web.tabbit.ai). A browser signed in
+// to either keeps the token under that site's host, so the host it was found
+// under names the account's site.
+export const HOSTS = ["web.tabbit.ai", "web.tabbit.com"]
 export const HOST = HOSTS[0]
 // The Keychain services the two builds keep their storage password under.
 export const SAFE_STORAGE = { intl: "Tabbit Safe Storage", cn: "Tabbit Browser Safe Storage" }
+export const TABBIT_CLI = process.env.TABBIT_CLI_PATH || path.join(os.homedir(), ".local", "bin", "tabbit-cli")
 
-// profileDirs are the places Tabbit keeps its profile: the China build's
-// "Tabbit Browser" and the international build's "Tabbit" (with the old
-// client's "Tabbit/User Data").
+// profileDirs are the places Tabbit keeps its profile: the international
+// build's "Tabbit" first, then the China build's "Tabbit Browser".
 export function profileDirs(env = process.env, home = os.homedir()) {
   const roots = [env.TABBIT_PROFILE_DIR, env.TABBIT_USER_DATA_DIR].filter(Boolean)
   if (process.platform === "darwin") {
     roots.push(
-      path.join(home, "Library", "Application Support", "Tabbit Browser"),
-      path.join(home, "Library", "Application Support", "Tabbit", "User Data"),
       path.join(home, "Library", "Application Support", "Tabbit"),
+      path.join(home, "Library", "Application Support", "Tabbit", "User Data"),
+      path.join(home, "Library", "Application Support", "Tabbit Browser"),
     )
   } else if (process.platform === "win32") {
     const local = env.LOCALAPPDATA || path.join(home, "AppData", "Local")
-    roots.push(path.join(local, "Tabbit Browser", "User Data"), path.join(local, "Tabbit", "User Data"))
+    roots.push(path.join(local, "Tabbit", "User Data"), path.join(local, "Tabbit Browser", "User Data"))
   } else {
     const config = env.XDG_CONFIG_HOME || path.join(home, ".config")
-    roots.push(path.join(config, "Tabbit Browser"), path.join(config, "Tabbit", "User Data"))
+    roots.push(path.join(config, "Tabbit", "User Data"), path.join(config, "Tabbit Browser"))
   }
   return [...new Set(roots)]
 }
@@ -205,9 +206,43 @@ function require_node_sqlite() {
 // `platform`, `tmpParent` and `run` are for the tests: the same code path
 // runs with a fixture store under a temp parent the test can look into
 // afterwards, and a fake `security`.
-export async function desktopSignIn({ dirs = profileDirs(), hosts = HOSTS, store, password, tmpParent, platform = process.platform, run } = {}) {
+// runtimeSignIn asks the running Tabbit browser directly via tabbit-cli so
+// signing in to an already-open international Tabbit.app does not block on a
+// macOS Keychain popup.
+export function runtimeSignIn({ cli = TABBIT_CLI, hosts = HOSTS, timeout = 15_000 } = {}) {
+  return new Promise((resolve) => {
+    if (!cli || !fs.existsSync(cli)) return resolve(null)
+    const task = `tabbit-auth-${process.pid}-${Date.now()}`
+    const script = `const urls = ${JSON.stringify(hosts.map((h) => `https://${h}`))};\nfor (const u of urls) {\n  const cs = await context.cookies(u);\n  const tok = cs.find((c) => c.name === "token" && c.value);\n  if (tok) {\n    const uid = cs.find((c) => c.name === "user_id")?.value || "";\n    return { url: u, token: tok.value, userId: uid };\n  }\n}\nreturn null;\n`
+    const child = execFile(cli, ["nodejs", "--task", task, "--request-id", "read-cookies", "--timeout-ms", "10000"], { encoding: "utf8", timeout, maxBuffer: 1 << 20 }, (error, stdout) => {
+      execFile(cli, ["finish", "--task", task, "--discard"], { timeout: 5_000 }, () => {})
+      if (error || !stdout) return resolve(null)
+      for (const line of String(stdout).trim().split(/\r?\n/).reverse()) {
+        try {
+          const parsed = JSON.parse(line)
+          const r = parsed?.result
+          if (parsed?.ok && r?.token && r?.url) {
+            const uidValue = String(r.userId || "")
+            const header = [`token=${r.token}`, uidValue && `user_id=${uidValue}`, uidValue && `SAPISID=${uidValue}`, "managed=tab_browser"].filter(Boolean).join("; ")
+            return resolve({ key: header, userId: uidValue, store: cli, site: r.url })
+          }
+        } catch {}
+      }
+      resolve(null)
+    })
+    child.stdin?.end(script)
+  })
+}
+
+export async function desktopSignIn(opts = {}) {
+  const { dirs = profileDirs(), hosts = HOSTS, store, password, tmpParent, platform = process.platform, run, useRuntime } = opts
   if (platform !== "darwin") {
     throw new Error(`reading Tabbit's cookies is macOS-only; on ${platform} paste the token instead`)
+  }
+  const allowRuntime = useRuntime ?? (!store && !password && !run && !("dirs" in opts))
+  if (allowRuntime) {
+    const live = await runtimeSignIn({ hosts })
+    if (live) return live
   }
   const files = store ? [store] : cookieStores(dirs)
   if (!files.length) throw new Error(`Tabbit isn't installed here, or hasn't been opened yet (looked in ${dirs.join(", ")}); open Tabbit, sign in there, and try again, ${PASTE}`)

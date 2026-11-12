@@ -48,7 +48,7 @@ function seal(plaintext, { password = PASSWORD, host = HOST } = {}) {
 
 test("a v10 blob decrypts to the plaintext", () => {
   const token = "eyJhbGciOiJSUzI1NiJ9.payload.sig"
-  assert.equal(decryptValue(seal(token), { password: PASSWORD }), token)
+  assert.equal(decryptValue(seal(token), { password: PASSWORD, host: HOST }), token)
 })
 
 test("the wrong password does not yield a plausible value", () => {
@@ -102,9 +102,9 @@ withCleanup("readCookies reads token and user_id back out of a real sqlite file"
   db.prepare("insert into cookies values (?,?,?,?)").run(HOST, "token", "", seal("tok-123"))
   db.prepare("insert into cookies values (?,?,?,?)").run(HOST, "user_id", "u-1", Buffer.alloc(0))
   db.close()
-  const rows = readCookies(file)
+  const rows = readCookies(file, { host: HOST })
   const token = rows.find((r) => r.name === "token")
-  assert.equal(decryptValue(token.encrypted, { password: PASSWORD }), "tok-123")
+  assert.equal(decryptValue(token.encrypted, { password: PASSWORD, host: HOST }), "tok-123")
   assert.equal(rows.find((r) => r.name === "user_id").value, "u-1")
 })
 
@@ -303,5 +303,5 @@ withCleanup("no store and no sign-in each say to open Tabbit and sign in", async
   await assert.rejects(() => desktopSignIn({ dirs: [missing], platform: "darwin", run: fakeSecurity({}).run }), /open Tabbit, sign in there, and try again/)
   const s = layoutStore("Tabbit", null)
   if (!s) return
-  await assert.rejects(() => desktopSignIn({ dirs: [s.profile], platform: "darwin", run: fakeSecurity({}).run, tmpParent: tmp("tabbit-parent-") }), /not signed in to web\.tabbit\.com or web\.tabbit\.ai; open Tabbit, sign in there/)
+  await assert.rejects(() => desktopSignIn({ dirs: [s.profile], platform: "darwin", run: fakeSecurity({}).run, tmpParent: tmp("tabbit-parent-") }), /not signed in to web\.tabbit\.ai or web\.tabbit\.com; open Tabbit, sign in there/)
 })

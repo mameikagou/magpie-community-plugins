@@ -49,6 +49,7 @@ function installFetch({ onCall } = {}) {
       return Response.json({
         models: [
           { display_name: "Default", supports_tools: true, support_thinking: true, model_access_type: "free_unlimited" },
+          { display_name: "Gemini-4-Carbon", supports_images: true, supports_tools: true, support_thinking: true, model_access_type: "free_metered" },
           { display_name: "Kimi-K3.1-Pro", supports_tools: true, support_thinking: true, model_access_type: "premium_only" },
           { display_name: "GLM-5.3-Flash", supports_images: true, supports_tools: true, support_thinking: true, model_access_type: "free_metered" },
         ],
@@ -64,7 +65,7 @@ function installFetch({ onCall } = {}) {
 
 const auth = { type: "api", key: "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1LTEifQ.sig", metadata: { userId: "u-1" } }
 
-test("config declares tabbit as an OpenAI-compatible provider with bootstrap models", async () => {
+test("config declares tabbit as an OpenAI-compatible provider with Gemini-4-Carbon bootstrap", async () => {
   const hooks = await TabbitPlugin()
   const cfg = { provider: {} }
   await hooks.config(cfg)
@@ -72,7 +73,7 @@ test("config declares tabbit as an OpenAI-compatible provider with bootstrap mod
   assert.equal(p.name, "Tabbit")
   assert.equal(p.npm, "@ai-sdk/openai-compatible")
   assert.ok(p.api.endsWith("/api/v3/chat"))
-  assert.ok(Object.keys(p.models).length >= 3)
+  assert.deepEqual(Object.keys(p.models), ["Gemini-4-Carbon"])
 })
 
 test("planTurn continues a room only when the transcript does", () => {
@@ -148,19 +149,27 @@ test("a streaming request comes back as OpenAI chunks ending in [DONE]", async (
   }
 })
 
-test("the model list follows the account, and premium rows are dropped on request", async () => {
+test("the model list defaults to Gemini-4-Carbon only, and TABBIT_MODELS=all exposes full catalog", async () => {
   const { restore } = installFetch()
+  const prev = process.env.TABBIT_MODELS
   try {
     const hooks = await TabbitPlugin()
     const provider = { models: {} }
+    delete process.env.TABBIT_MODELS
+    const carbonOnly = await hooks.provider.models(provider, { auth })
+    assert.deepEqual(Object.keys(carbonOnly), ["Gemini-4-Carbon"])
+
+    process.env.TABBIT_MODELS = "all"
     const rows = await hooks.provider.models(provider, { auth })
-    assert.deepEqual(Object.keys(rows), ["Default", "Kimi-K3.1-Pro", "GLM-5.3-Flash"])
+    assert.deepEqual(Object.keys(rows), ["Default", "Gemini-4-Carbon", "Kimi-K3.1-Pro", "GLM-5.3-Flash"])
 
     globalThis.magpie = { option: () => true }
     const freeOnly = await hooks.provider.models(provider, { auth })
-    assert.deepEqual(Object.keys(freeOnly), ["Default", "GLM-5.3-Flash"])
+    assert.deepEqual(Object.keys(freeOnly), ["Default", "Gemini-4-Carbon", "GLM-5.3-Flash"])
     delete globalThis.magpie
   } finally {
+    if (prev === undefined) delete process.env.TABBIT_MODELS
+    else process.env.TABBIT_MODELS = prev
     restore()
   }
 })

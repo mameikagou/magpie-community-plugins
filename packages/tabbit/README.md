@@ -89,16 +89,19 @@ to be asked with.
 | `model_access_type` | `free_unlimited` / `free_metered` / `premium_only` |
 | `hidden` | left out, as the app leaves it out |
 
-**Client tools are off** (`toolcall: false`). The catalog's `supports_tools`
-means Tabbit's *own* server-side tools — browser and search — not tools an
-agent declares: a turn asked to call a client-declared tool answers that it has
-no such tool. A tool-using agent should go through magpie's gateway tools
-instead.
+**Client tools are bridged via `<tool_call>` prompt protocol** (`toolcall: true`).
+The catalog's `supports_tools` means Tabbit's *own* server-side tools, so this
+plugin serializes OpenAI `tools` / `tool_choice` into the initial prompt, holds
+streaming `<tool_call>` blocks back from plain text deltas, parses single or
+parallel calls into OpenAI `tool_calls` (`finish_reason: "tool_calls"`), and
+continues the same Tabbit room with `[tool result ...]` deltas on subsequent
+steps.
 
-**Limits are not published** by Tabbit. Known ones are hard-coded
-(`DeepSeek-V4.1-Flash` and `DeepSeek-V4-Pro`: 1M context); everything else
-takes a default (`TABBIT_CONTEXT`, `TABBIT_OUTPUT`, 128k / 32k). A prompt past
-a real limit comes back as Tabbit's own error.
+**Model filtering & limits.** By default `DEFAULT_ONLY_MODELS` exposes
+`Gemini-4-Carbon` (`1M` context / `64k` output on `web.tabbit.ai`). Set
+`TABBIT_MODELS=all` (or a comma-separated list of `display_name`s) to expose
+additional models from the account's live catalog (`TABBIT_CONTEXT`,
+`TABBIT_OUTPUT` default to 128k / 32k for unlisted models).
 
 **Premium models** answer `403` with code `492` on a free account. The
 **Free models only** switch in the provider's options leaves them out of the

@@ -45,6 +45,8 @@ function tokenFor(label) {
 function tabbit({ accepts, down = [], runs } = {}) {
   const calls = []
   const original = globalThis.fetch
+  const prevModels = process.env.TABBIT_MODELS
+  process.env.TABBIT_MODELS = "all"
   globalThis.fetch = async (input, init = {}) => {
     const url = new URL(typeof input === "string" ? input : input.url)
     const method = (init.method ?? "GET").toUpperCase()
@@ -69,7 +71,14 @@ function tabbit({ accepts, down = [], runs } = {}) {
     }
     return new Response("not found", { status: 404 })
   }
-  return { calls, restore: () => (globalThis.fetch = original) }
+  return {
+    calls,
+    restore: () => {
+      globalThis.fetch = original
+      if (prevModels === undefined) delete process.env.TABBIT_MODELS
+      else process.env.TABBIT_MODELS = prevModels
+    },
+  }
 }
 
 const hosts = (calls) => [...new Set(calls.map((c) => c.host))]

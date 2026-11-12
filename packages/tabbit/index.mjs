@@ -31,10 +31,23 @@ import {
   stop,
   TabbitError,
 } from "./src/api.mjs"
-import { BOOTSTRAP, NPM, CHAT_BASE, rowsOf } from "./src/models.mjs"
+import { BOOTSTRAP, NPM, CHAT_BASE, rowsOf, allowedModels } from "./src/models.mjs"
 import { turnDeltas } from "./src/sse.mjs"
 import { desktopSignIn } from "./src/cookie.mjs"
 import { checkinOf } from "./src/checkin.mjs"
+import {
+  OPEN,
+  CLOSE,
+  partText,
+  toolsOf,
+  choiceOf,
+  toolsKeyOf,
+  callText,
+  choiceDirective,
+  toolPreamble,
+  parseToolCalls,
+  StreamHold,
+} from "./src/toolcall.mjs"
 
 const ID = "tabbit"
 const NAME = "Tabbit"
@@ -77,59 +90,154 @@ function stripModel(value) {
 // the OpenAI SDK sends. Only text parts are taken; an image part is named so
 // the turn still says something about it.
 function contentOf(content) {
-  if (typeof content === "string") return content
-  if (!Array.isArray(content)) return ""
-  const parts = []
-  for (const part of content) {
-    if (typeof part === "string") parts.push(part)
-    else if (part?.type === "text" || typeof part?.text === "string") parts.push(part.text ?? "")
-    else if (part?.type === "image_url" || part?.type === "image") parts.push("[image]")
-  }
-  return parts.join("\n")
+  return partText(content)
 }
 
 // historyOf is the conversation a room would remember, in order: system
-// prompts, the user's turns and the assistant's.
+// prompts, user turns, assistant replies (including tool_calls), and tool
+// execution results.
 function historyOf(messages) {
   const out = []
+  const callNames = new Map()
   for (const message of Array.isArray(messages) ? messages : []) {
-    const role = message?.role === "assistant" ? "assistant" : message?.role === "system" ? "system" : "user"
+    const rawRole = message?.role
+    if (rawRole === "system" || rawRole === "developer") {
+      const content = contentOf(message?.content)
+      if (content) out.push({ role: "system", content })
+      continue
+    }
+    if (rawRole === "assistant") {
+      const parts = []
+      const text = contentOf(message?.content)
+      if (text) parts.push(text)
+      const calls = Array.isArray(message?.tool_calls) ? message.tool_calls : []
+      for (const c of calls) {
+        if (c?.id && c?.function?.name) callNames.set(c.id, c.function.name)
+        parts.push(callText(c))
+      }
+      if (parts.length) out.push({ role: "assistant", content: parts.join("\n"), hasToolCalls: calls.length > 0 })
+      continue
+    }
+    if (rawRole === "tool" || rawRole === "function") {
+      const name = clean(message?.name) || callNames.get(message?.tool_call_id) || ""
+      const text = contentOf(message?.content)
+      const label = `[tool result${name ? ` of ${name}` : ""}${message?.tool_call_id ? ` (${message.tool_call_id})` : ""}]`
+      out.push({ role: "tool", content: `${label}\n${text}` })
+      continue
+    }
     const content = contentOf(message?.content)
-    if (content) out.push({ role, content })
+    if (content) out.push({ role: "user", content })
   }
   return out
 }
 
 // flatten writes a transcript as one prompt. Tabbit's turn takes one
 // `content` string, and a fresh room has no history of its own, so the
-// transcript is what carries it. Measured: the model answers the last
-// question with the earlier turns as context.
-function flatten(history) {
-  const systems = history.filter((m) => m.role === "system").map((m) => m.content)
+// transcript is what carries it. When client tools are active, their JSON
+// Schemas and `<tool_call>` instructions go at the top of the prompt.
+function flatten(history, body = null) {
+  const specs = toolsOf(body)
+  const ch = choiceOf(body, specs.map((t) => t.name))
+  const useTools = specs.length > 0 && !ch.off
+  const hasToolTurns = history.some((m) => m.role === "tool" || m.hasToolCalls)
+
+  if (!useTools && !hasToolTurns) {
+    const systems = history.filter((m) => m.role === "system").map((m) => m.content)
+    const turns = history.filter((m) => m.role !== "system")
+    const lastUser = [...turns].reverse().find((m) => m.role === "user")
+    const before = lastUser ? turns.slice(0, turns.lastIndexOf(lastUser)) : turns
+    const lines = []
+    if (systems.length) lines.push(`[system]\n${systems.join("\n\n")}`)
+    for (const m of before) lines.push(`${m.role === "assistant" ? "assistant" : "user"}: ${m.content}`)
+    const header = lines.length ? "Below is the conversation so far. Answer the final user message, continuing it.\n\n" : ""
+    return header + lines.join("\n\n") + (lines.length ? "\n\n" : "") + `user: ${lastUser?.content ?? ""}`
+  }
+
+  const systems = history.filter((m) => m.role === "system").map((m) => m.content.trim()).filter(Boolean)
   const turns = history.filter((m) => m.role !== "system")
-  const lastUser = [...turns].reverse().find((m) => m.role === "user")
-  const before = lastUser ? turns.slice(0, turns.lastIndexOf(lastUser)) : turns
-  const lines = []
-  if (systems.length) lines.push(`[system]\n${systems.join("\n\n")}`)
-  for (const m of before) lines.push(`${m.role === "assistant" ? "assistant" : "user"}: ${m.content}`)
-  const header = lines.length ? "Below is the conversation so far. Answer the final user message, continuing it.\n\n" : ""
-  return header + lines.join("\n\n") + (lines.length ? "\n\n" : "") + `user: ${lastUser?.content ?? ""}`
+  const blocks = []
+  if (useTools) blocks.push(toolPreamble(specs, ch))
+  if (systems.length) blocks.push(`# System Instructions\n\n${systems.join("\n\n")}`)
+  if (body?.response_format?.type === "json_object" || body?.response_format?.type === "json_schema") {
+    const schema = body.response_format.json_schema?.schema
+    blocks.push(`Answer with one valid JSON value and nothing else.${schema ? ` JSON Schema: ${JSON.stringify(schema)}` : ""}`)
+  }
+  const renderedTurns = turns.map((m) => {
+    if (m.role === "tool") return m.content
+    return `[${m.role}]\n${m.content}`
+  })
+  blocks.push(`# Conversation\n\n${renderedTurns.join("\n\n")}`)
+  blocks.push(
+    useTools
+      ? `Write the next assistant response now (without the [assistant] prefix). Remember: if you need to call a tool, end with ${OPEN}{"name": "<tool>", "arguments": {...}}${CLOSE} and wait for the caller's [tool result].`
+      : "Write the next assistant response now, without the [assistant] prefix.",
+  )
+  return blocks.join("\n\n")
+}
+
+// formatContinuation formats delta messages appended after `entry.sent` so an
+// active room can continue across both user follow-ups and multi-step tool
+// execution loops without re-sending the entire system prompt + tool catalog.
+function formatContinuation(added, useTools, ch) {
+  if (!added.length) return null
+  // Classic plain user follow-up: [assistant, user] or [user]
+  if (!useTools && added.every((m) => m.role === "assistant" || m.role === "user")) {
+    const lastUser = [...added].reverse().find((m) => m.role === "user")
+    if (lastUser && added.length <= 2) return lastUser.content
+    return null
+  }
+  // With tools active: allow [assistant] (the model's own previous reply or
+  // tool_calls turn) followed by any number of [tool] results and/or [user]
+  // follow-up messages.
+  let idx = 0
+  if (added[0]?.role === "assistant") idx = 1
+  const tail = added.slice(idx)
+  if (!tail.length) return null
+  if (!tail.every((m) => m.role === "tool" || m.role === "user")) return null
+
+  // Pure single user follow-up in a tool-enabled room
+  if (tail.length === 1 && tail[0].role === "user") {
+    return tail[0].content + choiceDirective(ch)
+  }
+
+  const parts = tail.map((m) => (m.role === "tool" ? m.content : `[user]\n${m.content}`))
+  parts.push(
+    `Continue from the tool result(s) above. If another tool call is needed, emit ${OPEN}{"name": "<tool>", "arguments": {...}}${CLOSE} with no trailing prose; otherwise answer the user directly.${choiceDirective(ch)}`,
+  )
+  return parts.join("\n\n")
 }
 
 // planTurn decides what one request sends: a new room with the flattened
-// transcript, or (when the transcript continues a room we already have) only
-// the newest message, hung off the previous answer.
-function planTurn(entry, messages, now = Date.now()) {
+// transcript, or (when the transcript and tool catalog continue a room we
+// already have) only the new user / tool-result messages hung off the previous
+// assistant message.
+function planTurn(entry, messages, now = Date.now(), body = null) {
+  if (typeof now === "object" && now !== null) {
+    body = now
+    now = Date.now()
+  }
   const history = historyOf(messages)
-  if (entry && now - entry.at < ROOM_TTL && history.length > entry.sent.length) {
+  const specs = toolsOf(body)
+  const ch = choiceOf(body, specs.map((t) => t.name))
+  const useTools = specs.length > 0 && !ch.off
+  const toolsKey = toolsKeyOf(body)
+  const allowedNames = useTools ? new Set(specs.map((s) => s.name)) : null
+
+  if (
+    entry &&
+    now - entry.at < ROOM_TTL &&
+    (entry.toolsKey ?? "") === toolsKey &&
+    history.length > entry.sent.length
+  ) {
     const continues = entry.sent.every((m, i) => history[i]?.role === m.role && history[i]?.content === m.content)
-    const added = history.slice(entry.sent.length)
-    const lastUser = [...added].reverse().find((m) => m.role === "user")
-    if (continues && lastUser && added.length <= 2) {
-      return { room: entry.room, parent: entry.parent, content: lastUser.content, history }
+    if (continues) {
+      const delta = formatContinuation(history.slice(entry.sent.length), useTools, ch)
+      if (delta) {
+        return { room: entry.room, parent: entry.parent, content: delta, history, toolsKey, useTools, allowedNames }
+      }
     }
   }
-  return { room: null, parent: null, content: flatten(history), history }
+  return { room: null, parent: null, content: flatten(history, body), history, toolsKey, useTools, allowedNames }
 }
 
 function estimateTokens(text) {
@@ -182,7 +290,8 @@ function chunkLine(model, delta, { finish = null, usage = null } = {}) {
   return `data: ${JSON.stringify(chunk)}\n\n`
 }
 
-function completionBody(model, text, reasoning, usage) {
+function completionBody(model, text, reasoning, usage, { calls = [] } = {}) {
+  const hasCalls = Array.isArray(calls) && calls.length > 0
   return {
     id: `chatcmpl-tabbit-${Date.now().toString(36)}`,
     object: "chat.completion",
@@ -191,8 +300,13 @@ function completionBody(model, text, reasoning, usage) {
     choices: [
       {
         index: 0,
-        message: { role: "assistant", content: text, ...(reasoning ? { reasoning_content: reasoning } : {}) },
-        finish_reason: "stop",
+        message: {
+          role: "assistant",
+          content: text || (hasCalls ? null : ""),
+          ...(reasoning ? { reasoning_content: reasoning } : {}),
+          ...(hasCalls ? { tool_calls: calls } : {}),
+        },
+        finish_reason: hasCalls ? "tool_calls" : "stop",
       },
     ],
     ...(usage ? { usage } : {}),
@@ -256,6 +370,7 @@ function streamTurn(response, { model, plan, body, signal, onEnd, onCancel }) {
         else signal.addEventListener("abort", stopOnce, { once: true })
       }
       let text = ""
+      const hold = new StreamHold({ enabled: Boolean(plan?.useTools), allowedNames: plan?.allowedNames ?? null })
       try {
         send(chunkLine(model, { role: "assistant", content: "" }))
         for await (const part of turnDeltas(response, {
@@ -265,7 +380,8 @@ function streamTurn(response, { model, plan, body, signal, onEnd, onCancel }) {
           if (part.type === "thinking" && part.value) send(chunkLine(model, { reasoning_content: part.value }))
           else if (part.type === "text" && part.value) {
             text += part.value
-            send(chunkLine(model, { content: part.value }))
+            const safe = hold.push(part.value)
+            if (safe) send(chunkLine(model, { content: safe }))
           } else if (part.type === "end") {
             if (part.state.failed) throw new TabbitError(`Tabbit's turn failed: ${JSON.stringify(part.state.failed).slice(0, 300)}`)
             if (part.state.truncated) {
@@ -275,6 +391,15 @@ function streamTurn(response, { model, plan, body, signal, onEnd, onCancel }) {
               send("data: [DONE]\n\n")
               return
             }
+            const { content: tail, calls } = hold.finish()
+            if (tail) send(chunkLine(model, { content: tail }))
+            if (calls.length) {
+              send(
+                chunkLine(model, {
+                  tool_calls: calls.map((c, index) => ({ index, id: c.id, type: "function", function: c.function })),
+                }),
+              )
+            }
             const usage = body?.stream_options?.include_usage
               ? {
                   prompt_tokens: estimateTokens(plan.content),
@@ -282,7 +407,7 @@ function streamTurn(response, { model, plan, body, signal, onEnd, onCancel }) {
                   total_tokens: estimateTokens(plan.content) + estimateTokens(text),
                 }
               : null
-            send(chunkLine(model, {}, { finish: "stop", usage }))
+            send(chunkLine(model, {}, { finish: calls.length ? "tool_calls" : "stop", usage }))
             send("data: [DONE]\n\n")
             onEnd?.(part.state)
           }
@@ -331,7 +456,7 @@ function createPlugin() {
     // refused (403 → marked signed out) or answered by someone else's room.
     const account = creds.uid || "?"
     const roomKey = session ? `${account}\u0000${session}` : ""
-    const plan = planTurn(rooms.get(roomKey), messages)
+    const plan = planTurn(rooms.get(roomKey), messages, Date.now(), body)
 
     const start = async (roomId, parentMessageId) => {
       await runTurn(creds, roomId, { content: plan.content, model, parentMessageId, signal: request.signal })
@@ -346,7 +471,7 @@ function createPlugin() {
         // A room that has been reset or dropped is replaced, not reported:
         // the transcript flattens the same way a new room needs.
         if (![400, 404, 409].includes(error?.status)) throw error
-        plan.content = flatten(plan.history)
+        plan.content = flatten(plan.history, body)
         plan.room = null
       }
     }
@@ -362,7 +487,7 @@ function createPlugin() {
         plan,
         body,
         signal: request.signal,
-        onEnd: (state) => remember(roomKey, room, plan.history, state?.assistantMessageId ?? null),
+        onEnd: (state) => remember(roomKey, room, plan.history, state?.assistantMessageId ?? null, plan.toolsKey),
         onCancel: () => stop(creds, room),
       })
       return new Response(stream, {
@@ -384,20 +509,27 @@ function createPlugin() {
         if (part.state.truncated) throw new TabbitError("Tabbit's turn was cut before it finished")
       }
     }
-    remember(roomKey, room, plan.history, assistantId)
+    remember(roomKey, room, plan.history, assistantId, plan.toolsKey)
+    const parsed = plan.useTools ? parseToolCalls(text, { allowedNames: plan.allowedNames }) : { text, calls: [] }
     return Response.json(
-      completionBody(model, text, reasoning, {
-        prompt_tokens: estimateTokens(plan.content),
-        completion_tokens: estimateTokens(text),
-        total_tokens: estimateTokens(plan.content) + estimateTokens(text),
-      }),
+      completionBody(
+        model,
+        parsed.text,
+        reasoning,
+        {
+          prompt_tokens: estimateTokens(plan.content),
+          completion_tokens: estimateTokens(text),
+          total_tokens: estimateTokens(plan.content) + estimateTokens(text),
+        },
+        { calls: parsed.calls },
+      ),
     )
   }
 
-  function remember(key, room, history, parent) {
+  function remember(key, room, history, parent, toolsKey = "") {
     if (!key) return
     pruneRooms()
-    rooms.set(key, { room, parent, sent: history, at: Date.now() })
+    rooms.set(key, { room, parent, sent: history, toolsKey, at: Date.now() })
   }
 
 
@@ -432,7 +564,9 @@ function createPlugin() {
           if (error?.signIn) throw error
           return provider.models
         }
-        const rows = rowsOf(catalog, { freeOnly: freeOnly() })
+        const allow = allowedModels()
+        const rows = rowsOf(catalog, { freeOnly: freeOnly(), only: allow })
+        if (allow) return rows
         return Object.keys(rows).length ? rows : provider.models
       },
     },
