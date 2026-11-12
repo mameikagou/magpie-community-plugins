@@ -21,6 +21,9 @@
 // web.tabbit.ai), so each account is served by the site its token belongs to.
 // BASE comes first and stays the default: a token it accepts never asks the
 // other site anything.
+import fs from "node:fs"
+import { execFileSync } from "node:child_process"
+
 export const SITES = ["https://web.tabbit.com", "https://web.tabbit.ai"]
 export const BASE = SITES[0]
 
@@ -153,22 +156,59 @@ export function stale(auth, skewMs = 60_000) {
   return claims.exp * 1000 - skewMs <= Date.now()
 }
 
+// isDefaultBrowser says whether Tabbit is this computer's default browser,
+// the fact the web app reads (chrome.tabInstance.isDefaultBrowser) before it
+// builds a unique-uuid. Read from the system, not assumed: the https handler
+// in the Windows registry (through reg.exe under WSL too), or macOS's
+// LaunchServices. TABBIT_DEFAULT_BROWSER=1/0 overrides it. Cached 10 minutes.
+let defaultSeen = null
+export function isDefaultBrowser(env = process.env, now = Date.now()) {
+  const forced = String(env?.TABBIT_DEFAULT_BROWSER ?? "").trim().toLowerCase()
+  if (["1", "true", "on", "yes"].includes(forced)) return true
+  if (["0", "false", "off", "no"].includes(forced)) return false
+  if (defaultSeen && now - defaultSeen.at < 10 * 60_000) return defaultSeen.value
+  let value = false
+  try {
+    value = readDefaultBrowser()
+  } catch {
+    value = false
+  }
+  defaultSeen = { value, at: now }
+  return value
+}
+
+const HTTPS_CHOICE = "HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https\\UserChoice"
+function readDefaultBrowser() {
+  const run = (file, args) => execFileSync(file, args, { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] })
+  if (process.platform === "win32") return /ProgId\s+REG_SZ\s+Tabbit/i.test(run("reg", ["query", HTTPS_CHOICE, "/v", "ProgId"]))
+  if (process.platform === "linux") {
+    const reg = "/mnt/c/Windows/System32/reg.exe"
+    if (fs.existsSync(reg) && /microsoft/i.test(fs.readFileSync("/proc/version", "utf8")))
+      return /ProgId\s+REG_SZ\s+Tabbit/i.test(run(reg, ["query", HTTPS_CHOICE, "/v", "ProgId"]))
+    return false
+  }
+  if (process.platform === "darwin") {
+    const handlers = run("defaults", ["read", "com.apple.LaunchServices/com.apple.launchservices.secure", "LSHandlers"])
+    for (const block of handlers.split(/\}\s*,?/)) if (/LSHandlerURLScheme\s*=\s*https;/.test(block)) return /LSHandlerRoleAll\s*=\s*"?[^;]*tabbit/i.test(block)
+  }
+  return false
+}
+
 // uniqueUuid builds the `unique-uuid` the Tabbit web app sends, the way it
 // builds it: 32 hex digits, the unix time in seconds spread over fixed
-// positions, and position 5 the "Tabbit is the default browser" marker. The
-// browser writes "1" there only when it really is the default browser, which
-// Tabbit counts toward Pro; this always writes something else, so a request
-// never claims that. Pro models aren't offered by this plugin anyway.
+// positions, and position 5 the "Tabbit is the default browser" marker —
+// "1" when it is (Tabbit counts that toward Pro), any other digit when it
+// isn't. `isDefault` is the real answer from isDefaultBrowser, as in the app.
 const MARKER_POS = 5
 const TIME_POS = [2, 7, 11, 14, 18, 21, 25, 28]
-export function uniqueUuid(now = Date.now(), random = Math.random) {
+export function uniqueUuid(now = Date.now(), random = Math.random, isDefault = false) {
   const hex = "0123456789abcdef"
   const notDefault = hex.replace("1", "")
   const time = Math.floor(now / 1000).toString(16).padStart(8, "0").slice(-8)
   let out = ""
   for (let i = 0; i < 32; i++) {
     const t = TIME_POS.indexOf(i)
-    if (i === MARKER_POS) out += notDefault[Math.floor(random() * notDefault.length)]
+    if (i === MARKER_POS) out += isDefault ? "1" : notDefault[Math.floor(random() * notDefault.length)]
     else if (t >= 0) out += time[t]
     else out += hex[Math.floor(random() * hex.length)]
   }
@@ -184,7 +224,7 @@ function headersFor(creds, site, extra) {
     // Browser") refuses a turn whose request carries no `unique-uuid`: the
     // browser sends a fresh one on every API call. Measured against a live
     // signed-in session on .ai; .com ignores the header.
-    "unique-uuid": uniqueUuid(),
+    "unique-uuid": uniqueUuid(Date.now(), Math.random, isDefaultBrowser()),
     origin: site,
     referer: `${site}/newtab`,
     ...extra,

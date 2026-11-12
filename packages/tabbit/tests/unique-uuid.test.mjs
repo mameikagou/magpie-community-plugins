@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { runTurn, uniqueUuid } from "../src/api.mjs"
+import { runTurn, uniqueUuid, isDefaultBrowser } from "../src/api.mjs"
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
@@ -18,7 +18,7 @@ for (const site of ["https://web.tabbit.ai", "https://web.tabbit.com"]) {
   })
 }
 
-test("unique-uuid never claims Tabbit is the default browser", () => {
+test("unique-uuid says not-default when Tabbit is not the default browser", () => {
   // Position 5 is the web app's default-browser marker; "1" means "set".
   for (let i = 0; i < 2000; i++) assert.notEqual(uniqueUuid().replace(/-/g, "")[5], "1")
   // Even when the random source lands on the marker's own digit.
@@ -31,4 +31,13 @@ test("unique-uuid carries the time the way the web app does", () => {
   const id = uniqueUuid(now).replace(/-/g, "")
   const time = [2, 7, 11, 14, 18, 21, 25, 28].map((p) => id[p]).join("")
   assert.equal(time, "6734abcd")
+})
+
+test("unique-uuid says default when Tabbit is the default browser, as the app does", () => {
+  for (let i = 0; i < 50; i++) assert.equal(uniqueUuid(Date.now(), Math.random, true).replace(/-/g, "")[5], "1")
+})
+
+test("TABBIT_DEFAULT_BROWSER overrides what the system says", () => {
+  assert.equal(isDefaultBrowser({ TABBIT_DEFAULT_BROWSER: "1" }), true)
+  assert.equal(isDefaultBrowser({ TABBIT_DEFAULT_BROWSER: "0" }), false)
 })

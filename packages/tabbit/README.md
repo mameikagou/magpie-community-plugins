@@ -64,7 +64,10 @@ before). A `web.tabbit.com` token never asks `web.tabbit.ai` anything.
 > traffic showed the header on `runs`, `join` and `usage`). The plugin sends
 > one per call (#834), built the way the web app builds it: the time in
 > seconds at fixed positions, and digit 5 — the web app's "Tabbit is the
-> default browser" marker, which Tabbit counts toward Pro — never set.
+> default browser" marker, which Tabbit counts toward Pro — set from the
+> computer's real answer, as the browser does: the `https` handler in the
+> Windows registry (also from WSL, through `reg.exe`) or macOS
+> LaunchServices. `TABBIT_DEFAULT_BROWSER=1` or `0` overrides it.
 
 There is no refresh endpoint. When the token runs out (7 days), magpie shows
 the account as needing a sign-in again and the first method takes one more
