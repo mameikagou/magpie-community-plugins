@@ -192,3 +192,47 @@ test("concurrency defaults to 4", async () => {
   const hooks = await TabbitPlugin()
   assert.equal(hooks.auth.maxConcurrency, 4)
 })
+
+test("a room past ROOM_CHARS moves to a fresh room by itself and the old one is archived", async () => {
+  const { ROOM_CHARS } = await import("../src/rooms.mjs")
+  const t = busyTabbit()
+  // The archive reads the old room's title and puts it back prefixed.
+  const inner = globalThis.fetch
+  globalThis.fetch = async (input, init = {}) => {
+    const url = new URL(typeof input === "string" ? input : input.url)
+    if (url.pathname === "/api/v0/chat/md5-key-sessions/user-sessions") {
+      t.calls.push({ method: "GET", path: url.pathname })
+      return Response.json({ sessions: [{ chat_session_id: "room-old", chat_session_title: "写代码" }] })
+    }
+    return inner(input, init)
+  }
+  try {
+    _internal.rooms.clear()
+    const hooks = await TabbitPlugin()
+    const loader = await hooks.auth.loader(async () => auth)
+    const history = [{ role: "user", content: "one" }, { role: "assistant", content: "ok" }]
+    const key = `u-1\u0000s-full\u0000plain`
+    _internal.rooms.set(key, laneOf({ room: "room-old", parent: "a0", history: _internal.historyOf(history), chars: ROOM_CHARS - 1 }))
+    const r = await ask(loader, "s-full", { messages: [...history, { role: "user", content: "two" }] })
+    assert.equal(r.status, 200)
+    const runs = t.calls.filter((c) => c.path.endsWith("/runs"))
+    assert.equal(runs.length, 1)
+    assert.equal(runs[0].room, "room-1", "the turn goes to a new room")
+    assert.match(runs[0].body.input_payload.content, /user: one[\s\S]*user: two/, "with the whole transcript")
+    assert.equal(_internal.rooms.get(key).room, "room-1")
+    for (let i = 0; i < 20 && !t.calls.some((c) => c.method === "PUT"); i++) await sleep(5)
+    const put = t.calls.find((c) => c.method === "PUT")
+    assert.equal(put?.path, "/proxy/v0/chat/sessions/room-old")
+    assert.deepEqual(put.body, { title: "[归档] 写代码" })
+  } finally {
+    globalThis.fetch = inner
+    t.restore()
+  }
+})
+
+test("ROOM_CHARS reads TABBIT_ROOM_CHARS within bounds", async () => {
+  const { roomCharsOf } = await import("../src/rooms.mjs")
+  assert.equal(roomCharsOf({}), 800_000)
+  assert.equal(roomCharsOf({ TABBIT_ROOM_CHARS: "300_000" }), 300_000)
+  assert.equal(roomCharsOf({ TABBIT_ROOM_CHARS: "10" }), 800_000)
+})

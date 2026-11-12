@@ -29,9 +29,16 @@ import path from "node:path"
 export const ROOM_TTL = 7 * 24 * 60 * 60 * 1000
 // Lanes kept (two per session at most), oldest dropped first.
 export const ROOM_LIMIT = 512
-// What one room is given in all, in characters. A rewritten transcript is sent
-// again in full; past this a new room is cheaper for the model to read.
-export const ROOM_CHARS = 800_000
+// What one room is given in all, in characters, before the next turn moves to
+// a fresh room by itself: the room holds every rewrite and note sent to it, so
+// past this the model reads far more than the caller's transcript. The move
+// sends the transcript in full to the new room; the caller sees nothing.
+// TABBIT_ROOM_CHARS sets it (50,000 to 2,000,000).
+export const ROOM_CHARS = roomCharsOf(process.env)
+export function roomCharsOf(env) {
+  const n = Number.parseInt(String(env?.TABBIT_ROOM_CHARS ?? "").replace(/[_,]/g, ""), 10)
+  return Number.isFinite(n) && n >= 50_000 && n <= 2_000_000 ? n : 800_000
+}
 
 const digest = (text) => createHash("sha256").update(text).digest("base64url").slice(0, 22)
 

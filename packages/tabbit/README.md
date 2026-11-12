@@ -188,9 +188,17 @@ request doesn't simply continue the room, it is still sent there, with a note:
 - a changed tool list: only the tools added, changed or removed.
 
 A new room is opened only for a new session, after a week, when a room has
-been given 800,000 characters in all, or when Tabbit refuses the room (reset,
-gone, or still busy after a `chat/stop`). DeepSeek Harness's per-step
-"Time sampled …" messages are ignored when matching a transcript.
+been given 800,000 characters in all (`TABBIT_ROOM_CHARS`, 50,000 to
+2,000,000), or when Tabbit refuses the room (reset, gone, or still busy after
+a `chat/stop`). DeepSeek Harness's per-step "Time sampled …" messages are
+ignored when matching a transcript.
+
+The move to a fresh room happens by itself, in the middle of a session: the
+turn that would have gone past the limit goes to a new room with the whole
+transcript, and the caller sees an ordinary answer. Once the new room has
+answered, the old one is archived in the Tabbit sidebar — Tabbit has no
+archive of its own, so its title gets an `[归档] ` prefix (the web app's own
+rename, `PUT /proxy/v0/chat/sessions/<id>`); it is not deleted.
 
 The record of which room carries which session is kept in
 `$XDG_STATE_HOME/magpie/tabbit-rooms.json` (or `~/.local/state/…`;

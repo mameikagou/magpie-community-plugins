@@ -31,6 +31,7 @@ import {
   runTurn,
   join,
   stop,
+  archiveRoom,
   TabbitError,
 } from "./src/api.mjs"
 import { BOOTSTRAP, NPM, CHAT_BASE, rowsOf, allowedModels } from "./src/models.mjs"
@@ -289,9 +290,14 @@ function planTurn(entry, messages, now = Date.now(), body = null) {
 
   const lane = laneFrom(entry)
   const live = lane && now - (lane.at ?? 0) < ROOM_TTL ? lane : null
+  // A room that has been given ROOM_CHARS in all is left behind: whatever
+  // this turn would have sent into it goes to a new room as the whole
+  // transcript instead, the same as a first turn.
+  const fits = (text) => (live.chars ?? 0) + text.length <= ROOM_CHARS
   const into = (content, mode) => {
     const note = toolsNote(live.tools ?? null, specs, ch, useTools)
     const text = note ? `${note}\n\n${content}` : content
+    if (!fits(text)) return null
     return { ...base, room: live.room, parent: live.parent ?? null, content: text, chars: (live.chars ?? 0) + text.length, mode }
   }
 
@@ -302,7 +308,11 @@ function planTurn(entry, messages, now = Date.now(), body = null) {
       const real = added.filter((m) => !isTimeNote(m))
       if (real.some((m) => m.role !== "assistant")) {
         const delta = formatContinuation(added, useTools, ch)
-        if (delta) return into(live.open ? `${NOTE_INTERRUPTED}\n\n${delta}` : delta, "continue")
+        if (delta) {
+          const plan = into(live.open ? `${NOTE_INTERRUPTED}\n\n${delta}` : delta, "continue")
+          if (plan) return plan
+          return fresh(base, history, body, "full", live.room)
+        }
       } else if (!real.length) {
         // Nothing new: the caller asks again (its last answer failed or was
         // cut). The room has the question already; say so and ask again.
@@ -313,17 +323,29 @@ function planTurn(entry, messages, now = Date.now(), body = null) {
             break
           }
         const again = formatContinuation(history.slice(last + 1).filter((m) => m.role !== "system"), useTools, ch)
-        if (again) return into(`${NOTE_RETRY}\n\n${again}`, "retry")
+        if (again) {
+          const plan = into(`${NOTE_RETRY}\n\n${again}`, "retry")
+          if (plan) return plan
+          return fresh(base, history, body, "full", live.room)
+        }
       }
     }
     // Rewritten: the same room, told to start over from the transcript.
     const content = `${NOTE_REWRITTEN}\n\n${flatten(history, body)}`
-    if ((live.chars ?? 0) + content.length <= ROOM_CHARS) {
+    if (fits(content)) {
       return { ...base, room: live.room, parent: live.parent ?? null, content, chars: (live.chars ?? 0) + content.length, mode: "rewrite" }
     }
+    return fresh(base, history, body, "full", live.room)
   }
+  return fresh(base, history, body, "new")
+}
+
+// fresh is a turn into a new room: the whole transcript. `mode` is "new" for
+// a session's first room and "full" when an old room was given enough; then
+// `retired` is that old room, archived once the new one has answered.
+function fresh(base, history, body, mode, retired = null) {
   const content = flatten(history, body)
-  return { ...base, room: null, parent: null, content, chars: content.length, mode: "new" }
+  return { ...base, room: null, parent: null, content, chars: content.length, mode, retired }
 }
 
 function estimateTokens(text) {
@@ -611,6 +633,7 @@ function createPlugin() {
             // not reported: the transcript flattens the way a new room needs.
             plan.content = flatten(plan.history, body)
             plan.chars = plan.content.length
+            plan.retired = plan.room
             plan.room = null
             plan.parent = null
           }
@@ -625,8 +648,16 @@ function createPlugin() {
       // After a turn the lane is what the room now holds. A turn that went
       // out but whose answer never came back is remembered as `open`: the
       // room has the question and a half answer the caller never saw.
-      const keep = (parent, open) =>
+      const keep = (parent, open) => {
         remember(roomKey, { room, parent, history: plan.history, tools: plan.tools, chars: plan.chars, open })
+        // The room this session outgrew is archived once the new one has
+        // answered, so it stays readable in the sidebar but marked as done.
+        if (!open && plan.retired && plan.retired !== room) {
+          const old = plan.retired
+          plan.retired = null
+          archiveRoom(creds, old).catch(() => {})
+        }
+      }
 
       if (body?.stream === true) {
         let ended = false

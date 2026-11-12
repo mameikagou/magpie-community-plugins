@@ -460,3 +460,37 @@ export async function stop(creds, room) {
     /* stopping is best effort */
   }
 }
+
+// renameRoom sets a room's title in the Tabbit sidebar: the call the web app's
+// rename makes (PUT /proxy/v0/chat/sessions/<id> {title}, answered "Session
+// title updated successfully"). Tabbit has no archive of its own, so a room
+// the plugin has moved on from is archived by title. Best effort.
+export async function renameRoom(creds, room, title) {
+  try {
+    await call(creds, `/proxy/v0/chat/sessions/${encodeURIComponent(room)}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ title }) }, AbortSignal.timeout(10_000))
+    return true
+  } catch {
+    return false
+  }
+}
+
+// roomTitle reads a room's sidebar title from the newest sessions (a room the
+// plugin just used is among them), or null.
+export async function roomTitle(creds, room) {
+  try {
+    const res = await call(creds, "/api/v0/chat/md5-key-sessions/user-sessions?page=1&size=50", { method: "GET" }, AbortSignal.timeout(10_000))
+    const data = await res.json()
+    const row = (data?.sessions ?? []).find((s) => s?.chat_session_id === room)
+    return typeof row?.chat_session_title === "string" ? row.chat_session_title : null
+  } catch {
+    return null
+  }
+}
+
+// archiveRoom marks a room the plugin moved on from: its title, prefixed.
+export const ARCHIVED = "[归档] "
+export async function archiveRoom(creds, room) {
+  const title = (await roomTitle(creds, room)) ?? ""
+  if (title.startsWith(ARCHIVED)) return true
+  return renameRoom(creds, room, `${ARCHIVED}${title || "Tabbit 会话"}`.slice(0, 100))
+}
