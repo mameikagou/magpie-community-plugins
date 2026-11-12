@@ -92,17 +92,60 @@ test("planTurn continues a room only when the transcript does", () => {
   assert.equal(next.content, "我叫什么")
 })
 
-test("a diverging transcript gets a fresh room and a flattened prompt", () => {
+test("a rewritten transcript stays in its room, with a note and the whole transcript", () => {
   const entry = { room: "room-1", parent: "a1", sent: [{ role: "user", content: "别的" }], at: 1000 }
   const plan = _internal.planTurn(entry, [{ role: "user", content: "全新的话题" }], 2000)
-  assert.equal(plan.room, null)
+  assert.equal(plan.room, "room-1")
+  assert.equal(plan.parent, "a1")
+  assert.equal(plan.mode, "rewrite")
+  assert.match(plan.content, /conversation was rewritten/)
   assert.match(plan.content, /全新的话题/)
+})
+
+test("a retry of the same request stays in its room and asks again", () => {
+  const sent = [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }]
+  const entry = { room: "room-1", parent: "a2", sent, at: 1000 }
+  const plan = _internal.planTurn(entry, sent, 2000)
+  assert.equal(plan.room, "room-1")
+  assert.equal(plan.mode, "retry")
+  assert.match(plan.content, /did not reach the caller/)
+  assert.match(plan.content, /c$/)
+})
+
+test("time notes don't break a continuation", () => {
+  const note = (n) => ({ role: "user", content: `Time sampled while preparing turn 1, step ${n}: 2026-11-13T00:00:00+08:00[Asia/Shanghai]\nBrowser time zone for this request: Asia/Shanghai.\nElapsed since the preceding step context: 1s.` })
+  const entry = { room: "room-1", parent: "a1", sent: [{ role: "user", content: "x" }, note(1)], at: 1000 }
+  const plan = _internal.planTurn(entry, [{ role: "user", content: "x" }, note(1), { role: "assistant", content: "y" }, note(2), { role: "user", content: "z" }], 2000)
+  assert.equal(plan.room, "room-1")
+  assert.equal(plan.mode, "continue")
+  assert.match(plan.content, /z/)
+  assert.doesNotMatch(plan.content, /^x/)
+})
+
+test("a changed tool list is a note, not a new room", () => {
+  const tool = (name, d = "does " + name) => ({ type: "function", function: { name, description: d, parameters: { type: "object", properties: {} } } })
+  const first = _internal.planTurn(undefined, [{ role: "user", content: "hi" }], 1000, null)
+  const body1 = { tools: [tool("read"), tool("bash")] }
+  const p1 = _internal.planTurn(undefined, [{ role: "user", content: "hi" }], body1)
+  assert.equal(p1.mode, "new")
+  assert.ok(first)
+  const entry = { room: "room-1", parent: "a1", count: 0, at: Date.now() }
+  const lane = Object.assign({}, entry, { sent: [{ role: "user", content: "hi" }, { role: "assistant", content: "ok" }], tools: p1.tools })
+  const p2 = _internal.planTurn(lane, [{ role: "user", content: "hi" }, { role: "assistant", content: "ok" }, { role: "user", content: "next" }], { tools: [tool("read"), tool("grep")] })
+  assert.equal(p2.room, "room-1")
+  assert.equal(p2.mode, "continue")
+  assert.match(p2.content, /tool list changed/)
+  assert.match(p2.content, /`bash`/)
+  assert.match(p2.content, /## grep/)
+  assert.doesNotMatch(p2.content, /## read/)
 })
 
 test("a stale room is not continued", () => {
   const entry = { room: "room-1", parent: "a1", sent: [{ role: "user", content: "a" }], at: 0 }
-  const plan = _internal.planTurn(entry, [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }], 31 * 60 * 1000)
+  const plan = _internal.planTurn(entry, [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }], 8 * 24 * 60 * 60 * 1000)
   assert.equal(plan.room, null)
+  const fresh = _internal.planTurn(entry, [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }], 31 * 60 * 1000)
+  assert.equal(fresh.room, "room-1", "rooms now last a week")
 })
 
 test("a non-streaming request is answered as one chat.completion", async () => {
@@ -571,7 +614,7 @@ test("a quiet stream ends at the turn timeout and stops the run", async () => {
   }
 })
 
-test("a stream cut after the turn starts is an error event, and the room is not remembered", async () => {
+test("a stream cut after the turn starts is an error event, and the room is remembered as interrupted", async () => {
   const encoder = new TextEncoder()
   const original = globalThis.fetch
   globalThis.fetch = async (input, init = {}) => {
@@ -604,7 +647,14 @@ test("a stream cut after the turn starts is an error event, and the room is not 
     assert.match(text, /"error"/)
     assert.match(text, /data: \[DONE\]/)
     assert.doesNotMatch(text, /"finish_reason":"stop"/)
-    assert.equal(_internal.rooms.size, 0, "a cut turn was remembered as a room")
+    // The room got the question; the next request says the reply was lost.
+    assert.equal(_internal.rooms.size, 1)
+    const [lane] = _internal.rooms.values()
+    assert.equal(lane.room, "room-cut")
+    assert.equal(lane.open, true)
+    const next = _internal.planTurn(lane, [{ role: "user", content: "hi" }, { role: "assistant", content: "" }, { role: "user", content: "again?" }], Date.now(), null)
+    assert.equal(next.room, "room-cut")
+    assert.match(next.content, /interrupted/)
   } finally {
     globalThis.fetch = original
     _internal.rooms.clear()
@@ -613,11 +663,11 @@ test("a stream cut after the turn starts is an error event, and the room is not 
 
 test("rooms are pruned by ttl and capped in size", () => {
   _internal.rooms.clear()
-  const stale = Date.now() - 31 * 60 * 1000
+  const stale = Date.now() - 8 * 24 * 60 * 60 * 1000
   _internal.rooms.set("old", { room: "r", parent: null, sent: [], at: stale })
-  for (let i = 0; i < 400; i++) _internal.rooms.set(`k${i}`, { room: "r", parent: null, sent: [], at: Date.now() })
+  for (let i = 0; i < 700; i++) _internal.rooms.set(`k${i}`, { room: "r", parent: null, sent: [], at: Date.now() })
   _internal.pruneRooms()
   assert.equal(_internal.rooms.has("old"), false)
-  assert.ok(_internal.rooms.size <= 256, "size " + _internal.rooms.size)
+  assert.ok(_internal.rooms.size <= 512, "size " + _internal.rooms.size)
   _internal.rooms.clear()
 })

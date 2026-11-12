@@ -169,15 +169,38 @@ out — comes back as an error event, not as a short answer: an agent would
 otherwise take a half or empty reply as the answer. A turn that times out also
 sends `chat/stop`, so it stops spending the account's allowance.
 
-**Conversation history** lives in the room. Each magpie session is given one
-room (`chat.headers` carries the session id), so a follow-up inside a session
-sends only the new message and hangs it off the previous answer's id — the room
-is not replayed into the prompt. A request whose transcript doesn't continue
-the room (a new session, an edited history, a room Tabbit reset) gets a fresh
-room with the whole transcript flattened into one prompt; measured, the model
-answers the last question with the earlier turns as context.
+**Conversation history** lives in the room, and a session keeps its room.
+Each magpie session (`chat.headers` carries the session id) gets one room for
+the agent's requests (the ones with client tools) and one for its side
+requests (a title, a summary). A follow-up sends only the new messages, hung
+off the previous answer's id; the room is not replayed into the prompt.
 
-`maxConcurrency` is **1**: Tabbit answers one turn at a time.
+A Tabbit room is linear: measured, the model sees every earlier turn of the
+room whatever `parent_message_id` says, so a room can't be rewound. So when a
+request doesn't simply continue the room, it is still sent there, with a note:
+
+- the same request again (the answer didn't arrive): "answer it again";
+- an answer that was cut before it reached the caller: "disregard it";
+- a rewritten history (compacted, edited): "the transcript was rewritten",
+  then the whole transcript, flattened;
+- a changed tool list: only the tools added, changed or removed.
+
+A new room is opened only for a new session, after a week, when a room has
+been given 800,000 characters in all, or when Tabbit refuses the room (reset,
+gone, or still busy after a `chat/stop`). DeepSeek Harness's per-step
+"Time sampled …" messages are ignored when matching a transcript.
+
+The record of which room carries which session is kept in
+`$XDG_STATE_HOME/magpie/tabbit-rooms.json` (or `~/.local/state/…`;
+`TABBIT_ROOMS_FILE` moves it, `off` turns it off), so a restart of magpie keeps
+a session in its room. It holds hashes, not text: a chain hash of the
+transcript sent, a hash per tool, the room and answer ids.
+
+**Concurrency.** A room answers one turn at a time (a second run is refused
+with 409), while separate rooms of one account answer side by side (20 at
+once, measured). Requests for the same room therefore wait in the plugin, in
+order, and the plugin answers up to **4** turns at once across rooms
+(`maxConcurrency`; `TABBIT_CONCURRENCY=1..16` changes it).
 
 **The 20,000-character turn cap.** Tabbit refuses a turn whose `content` is
 longer than 20,000 characters. The web app checks it before sending
@@ -236,10 +259,10 @@ synthetic Chromium `v10` blob.
 
 ## Limits worth knowing
 
-- A turn is a web-app turn: first text takes seconds, and one turn runs at a
-  time.
-- Tabbit keeps the room's own history, so a flattened prompt is the fallback
-  path, not the normal one. A flattened prompt past the 20,000-character turn
+- A turn is a web-app turn: first text takes seconds, and a room runs one
+  turn at a time.
+- Tabbit keeps the room's own history, so a flattened prompt is sent only to a
+  new room or after a rewrite, not on every turn. A flattened prompt past the 20,000-character turn
   cap is sent in parts (see above); a transcript past the model's own context
   limit is Tabbit's call, and Tabbit answers with its own error.
 - The catalog call answers without a valid token; a token that has really

@@ -15,10 +15,12 @@
 // same trick the WorkBuddy plugin uses for its own protocol, not a sidecar.
 //
 // Turn history: Tabbit keeps it in the room, so a follow-up inside the same
-// magpie session sends only the new message and hangs it off the previous
-// answer's id. A request whose transcript doesn't continue the room gets a
-// new room and the whole transcript flattened into one prompt — measured:
-// the model answers the last question with the earlier turns as context.
+// magpie session sends only the new messages and hangs them off the previous
+// answer's id. A session keeps its room: a retry, a changed tool list or a
+// rewritten (compacted, edited) transcript is sent into the same room with a
+// note that says so, rather than opening a new room each time — see
+// src/rooms.mjs. The session's side requests (no client tools: a title, a
+// summary) keep a second room, and each room takes one turn at a time.
 
 import {
   credsOf,
@@ -34,6 +36,20 @@ import {
 import { BOOTSTRAP, NPM, CHAT_BASE, rowsOf, allowedModels } from "./src/models.mjs"
 import { turnDeltas, readTurn } from "./src/sse.mjs"
 import { splitTurn } from "./src/chunk.mjs"
+import {
+  ROOM_TTL,
+  ROOM_CHARS,
+  cutOf,
+  isTimeNote,
+  toolHashes,
+  laneOf,
+  laneFrom,
+  pruneLanes,
+  serial,
+  roomsFile,
+  loadRooms,
+  saveRooms,
+} from "./src/rooms.mjs"
 import { desktopSignIn } from "./src/cookie.mjs"
 import { checkinOf } from "./src/checkin.mjs"
 import {
@@ -54,20 +70,55 @@ const ID = "tabbit"
 const NAME = "Tabbit"
 const SESSION = "x-magpie-tabbit-session"
 const FREE_ONLY = "freeOnly"
-const ROOM_TTL = 30 * 60 * 1000
-// A cap as well as the TTL: a process that runs for days sees many sessions,
-// and the map must not grow with them. Oldest goes first.
-const ROOM_LIMIT = 256
 
-// Rooms are this process's memory of a magpie session, one per session id.
-// They are not persisted: a restart starts new rooms, which costs nothing
-// because a room whose transcript no longer matters is simply abandoned.
+// How many turns the plugin has Tabbit answer at once, across all sessions.
+// Separate rooms answer side by side (20 at once, measured); 4 is enough for
+// two agent sessions with a side request each, without leaning on the account.
+const CONCURRENCY = concurrencyOf(process.env)
+function concurrencyOf(env) {
+  const n = Number.parseInt(env?.TABBIT_CONCURRENCY ?? "", 10)
+  return Number.isFinite(n) && n >= 1 && n <= 16 ? n : 4
+}
+
+// Rooms: per magpie session, account and lane, the lane record of
+// src/rooms.mjs. Kept in memory and in a small file of hashes, so a restart
+// of the plugin host keeps a session in its rooms.
 const rooms = new Map()
+const locks = new Map()
+const roomsPath = roomsFile()
+let roomsLoaded = false
+function loadOnce() {
+  if (roomsLoaded) return
+  roomsLoaded = true
+  loadRooms(roomsPath, rooms)
+}
 
 // pruneRooms drops what is past its TTL and then the oldest beyond the cap.
 function pruneRooms(now = Date.now()) {
-  for (const [k, entry] of rooms) if (now - entry.at >= ROOM_TTL) rooms.delete(k)
-  while (rooms.size > ROOM_LIMIT) rooms.delete(rooms.keys().next().value)
+  pruneLanes(rooms, now)
+}
+
+const NOTE_REWRITTEN =
+  "[Note from the caller: the conversation was rewritten since the messages above (compacted, edited or restarted). Disregard everything earlier in this room, including any earlier tool list; the complete, current transcript follows and replaces it.]"
+const NOTE_RETRY =
+  "[Note from the caller: your previous answer to the message below did not reach the caller. Answer it again.]"
+const NOTE_INTERRUPTED =
+  "[Note from the caller: your last reply in this room was interrupted and never reached the caller; disregard it.]"
+
+// toolsNote tells a room what changed in the client's tool list since the
+// room last saw it, instead of resending the whole catalog.
+function toolsNote(prev, specs, ch, useTools) {
+  const now = useTools ? toolHashes(specs) : null
+  if (!prev && !now) return ""
+  if (!prev) return `${toolPreamble(specs, ch)}\n\n[Note from the caller: the client tools above are available from now on.]`
+  if (!now) return `[Note from the caller: client tools are no longer available in this conversation. Don't write ${OPEN} blocks; answer in plain text.]`
+  const removed = Object.keys(prev).filter((n) => !(n in now))
+  const changed = specs.filter((s) => prev[s.name] !== now[s.name])
+  if (!removed.length && !changed.length) return ""
+  const lines = ["[Note from the caller: the client tool list changed.]"]
+  if (removed.length) lines.push(`No longer available, don't call: ${removed.map((n) => `\`${n}\``).join(", ")}.`)
+  if (changed.length) lines.push(`New or changed tools (these definitions replace earlier ones):\n\n${changed.map((s) => s.line).join("\n\n")}`)
+  return lines.join("\n\n")
 }
 
 const clean = (v) => (typeof v === "string" ? v.trim() : "")
@@ -78,6 +129,21 @@ function sessionOf(headers) {
   } catch {
     return ""
   }
+}
+
+// usesTools is whether a request goes out with its client tools — the same
+// test planTurn makes, needed earlier to pick the lane.
+function usesTools(body) {
+  const specs = toolsOf(body)
+  return specs.length > 0 && !choiceOf(body, specs.map((t) => t.name)).off
+}
+
+function sleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve()
+    const timer = setTimeout(resolve, ms)
+    signal?.addEventListener?.("abort", () => (clearTimeout(timer), resolve()), { once: true })
+  })
 }
 
 // stripModel accepts either the bare id magpie sends the SDK or a
@@ -176,42 +242,37 @@ function flatten(history, body = null) {
   return blocks.join("\n\n")
 }
 
-// formatContinuation formats delta messages appended after `entry.sent` so an
-// active room can continue across both user follow-ups and multi-step tool
-// execution loops without re-sending the entire system prompt + tool catalog.
+// formatContinuation formats the messages a room hasn't seen yet — the ones
+// after what it was last sent — so a room continues across user follow-ups
+// and tool loops without the system prompt and tool catalog again. A leading
+// assistant message is the room's own last reply and is skipped.
 function formatContinuation(added, useTools, ch) {
-  if (!added.length) return null
-  // Classic plain user follow-up: [assistant, user] or [user]
-  if (!useTools && added.every((m) => m.role === "assistant" || m.role === "user")) {
-    const lastUser = [...added].reverse().find((m) => m.role === "user")
-    if (lastUser && added.length <= 2) return lastUser.content
-    return null
-  }
-  // With tools active: allow [assistant] (the model's own previous reply or
-  // tool_calls turn) followed by any number of [tool] results and/or [user]
-  // follow-up messages.
-  let idx = 0
-  if (added[0]?.role === "assistant") idx = 1
-  const tail = added.slice(idx)
+  const tail = added[0]?.role === "assistant" ? added.slice(1) : added
   if (!tail.length) return null
-  if (!tail.every((m) => m.role === "tool" || m.role === "user")) return null
+  if (!useTools && tail.every((m) => m.role === "user")) return tail.map((m) => m.content).join("\n\n")
+  if (useTools && tail.length === 1 && tail[0].role === "user") return tail[0].content + choiceDirective(ch)
 
-  // Pure single user follow-up in a tool-enabled room
-  if (tail.length === 1 && tail[0].role === "user") {
-    return tail[0].content + choiceDirective(ch)
-  }
-
-  const parts = tail.map((m) => (m.role === "tool" ? m.content : `[user]\n${m.content}`))
+  const parts = tail.map((m) => (m.role === "tool" ? m.content : `[${m.role}]\n${m.content}`))
+  const hasResults = tail.some((m) => m.role === "tool")
   parts.push(
-    `Continue from the tool result(s) above. If another tool call is needed, emit ${OPEN}{"name": "<tool>", "arguments": {...}}${CLOSE} with no trailing prose; otherwise answer the user directly.${choiceDirective(ch)}`,
+    !useTools
+      ? "Write the next assistant response now, without the [assistant] prefix."
+      : hasResults
+        ? `Continue from the tool result(s) above. If another tool call is needed, emit ${OPEN}{"name": "<tool>", "arguments": {...}}${CLOSE} with no trailing prose; otherwise answer the user directly.${choiceDirective(ch)}`
+        : `Write the next assistant response now. If you need a tool, end with ${OPEN}{"name": "<tool>", "arguments": {...}}${CLOSE}.${choiceDirective(ch)}`,
   )
   return parts.join("\n\n")
 }
 
-// planTurn decides what one request sends: a new room with the flattened
-// transcript, or (when the transcript and tool catalog continue a room we
-// already have) only the new user / tool-result messages hung off the previous
-// assistant message.
+// planTurn decides what one request sends into the lane's room (`entry`, the
+// lane record of src/rooms.mjs, or nothing yet). In order:
+//   - the transcript continues what the room was sent: only the new messages;
+//   - it is exactly what the room was last sent: a retry, with a note and the
+//     last message again;
+//   - anything else (compacted, edited, another conversation): a note that the
+//     transcript was rewritten, then the whole of it — still the same room;
+//   - no room yet, or the room is full: a new room with the whole transcript.
+// A changed tool list is a note in front of whatever goes into an old room.
 function planTurn(entry, messages, now = Date.now(), body = null) {
   if (typeof now === "object" && now !== null) {
     body = now
@@ -223,22 +284,46 @@ function planTurn(entry, messages, now = Date.now(), body = null) {
   const useTools = specs.length > 0 && !ch.off
   const toolsKey = toolsKeyOf(body)
   const allowedNames = useTools ? new Set(specs.map((s) => s.name)) : null
+  const tools = useTools ? toolHashes(specs) : null
+  const base = { history, toolsKey, useTools, allowedNames, tools }
 
-  if (
-    entry &&
-    now - entry.at < ROOM_TTL &&
-    (entry.toolsKey ?? "") === toolsKey &&
-    history.length > entry.sent.length
-  ) {
-    const continues = entry.sent.every((m, i) => history[i]?.role === m.role && history[i]?.content === m.content)
-    if (continues) {
-      const delta = formatContinuation(history.slice(entry.sent.length), useTools, ch)
-      if (delta) {
-        return { room: entry.room, parent: entry.parent, content: delta, history, toolsKey, useTools, allowedNames }
+  const lane = laneFrom(entry)
+  const live = lane && now - (lane.at ?? 0) < ROOM_TTL ? lane : null
+  const into = (content, mode) => {
+    const note = toolsNote(live.tools ?? null, specs, ch, useTools)
+    const text = note ? `${note}\n\n${content}` : content
+    return { ...base, room: live.room, parent: live.parent ?? null, content: text, chars: (live.chars ?? 0) + text.length, mode }
+  }
+
+  if (live) {
+    const cut = cutOf(live, history)
+    if (cut !== null) {
+      const added = history.slice(cut)
+      const real = added.filter((m) => !isTimeNote(m))
+      if (real.some((m) => m.role !== "assistant")) {
+        const delta = formatContinuation(added, useTools, ch)
+        if (delta) return into(live.open ? `${NOTE_INTERRUPTED}\n\n${delta}` : delta, "continue")
+      } else if (!real.length) {
+        // Nothing new: the caller asks again (its last answer failed or was
+        // cut). The room has the question already; say so and ask again.
+        let last = -1
+        for (let i = history.length - 1; i >= 0; i--)
+          if (history[i].role === "assistant") {
+            last = i
+            break
+          }
+        const again = formatContinuation(history.slice(last + 1).filter((m) => m.role !== "system"), useTools, ch)
+        if (again) return into(`${NOTE_RETRY}\n\n${again}`, "retry")
       }
     }
+    // Rewritten: the same room, told to start over from the transcript.
+    const content = `${NOTE_REWRITTEN}\n\n${flatten(history, body)}`
+    if ((live.chars ?? 0) + content.length <= ROOM_CHARS) {
+      return { ...base, room: live.room, parent: live.parent ?? null, content, chars: (live.chars ?? 0) + content.length, mode: "rewrite" }
+    }
   }
-  return { room: null, parent: null, content: flatten(history, body), history, toolsKey, useTools, allowedNames }
+  const content = flatten(history, body)
+  return { ...base, room: null, parent: null, content, chars: content.length, mode: "new" }
 }
 
 function estimateTokens(text) {
@@ -341,8 +426,9 @@ function errorResponse(error) {
 
 // streamTurn writes one joined turn out as OpenAI chunk lines. `onCancel`
 // ends the run at Tabbit when the client goes away early: the turn keeps
-// producing for a while otherwise, and the account pays for it.
-function streamTurn(response, { model, plan, body, signal, onEnd, onCancel }) {
+// producing for a while otherwise, and the account pays for it. `onClose`
+// runs once when the stream is over, however it ended.
+function streamTurn(response, { model, plan, body, signal, onEnd, onCancel, onClose }) {
   const encoder = new TextEncoder()
   const stopReading = new AbortController()
   let stopped = false
@@ -353,6 +439,16 @@ function streamTurn(response, { model, plan, body, signal, onEnd, onCancel }) {
       onCancel?.()
     } catch {
       /* stopping is best effort */
+    }
+  }
+  let closed = false
+  const closeOnce = () => {
+    if (closed) return
+    closed = true
+    try {
+      onClose?.()
+    } catch {
+      /* bookkeeping only */
     }
   }
   return new ReadableStream({
@@ -424,6 +520,7 @@ function streamTurn(response, { model, plan, body, signal, onEnd, onCancel }) {
         } catch {
           /* already closed */
         }
+        closeOnce()
       }
     },
     async cancel() {
@@ -433,6 +530,7 @@ function streamTurn(response, { model, plan, body, signal, onEnd, onCancel }) {
       stopReading.abort(new Error("cancelled"))
       stopOnce()
       signal?.removeEventListener?.("abort", stopOnce)
+      closeOnce()
     },
   })
 }
@@ -455,98 +553,147 @@ function createPlugin() {
     // The account is part of the key: magpie may send a session's next request
     // on another account, and continuing that account's room would either be
     // refused (403 → marked signed out) or answered by someone else's room.
+    // The lane is too: the agent's requests (with client tools) and the side
+    // requests of the same session (a title, a summary) keep a room each.
+    loadOnce()
     const account = creds.uid || "?"
-    const roomKey = session ? `${account}\u0000${session}` : ""
-    const plan = planTurn(rooms.get(roomKey), messages, Date.now(), body)
+    const lane = usesTools(body) ? "tools" : "plain"
+    const roomKey = session ? `${account}\u0000${session}\u0000${lane}` : ""
+    const run = (task) => (roomKey ? serial(locks, roomKey, task) : task(() => {}))
+    return await run((release) => turn(release))
 
-    const start = async (roomId, parentMessageId) => {
+    async function turn(release) {
+      const plan = planTurn(rooms.get(roomKey), messages, Date.now(), body)
+
       // A prompt past Tabbit's per-turn cap goes in as several turns of the
       // same room (see src/chunk.mjs). Each earlier part is read to its end:
       // a room takes one run at a time (a part stopped early left the next
       // one refused with 409 "already has an active room run").
-      const parts = splitTurn(plan.content)
-      let parent = parentMessageId
-      for (const part of parts.slice(0, -1)) {
-        await runTurn(creds, roomId, { content: part, model, parentMessageId: parent, signal: request.signal })
-        const state = await readTurn(await join(creds, roomId, { signal: request.signal }), {
-          signal: request.signal,
-          onTimeout: () => stop(creds, roomId),
+      const start = async (roomId, parentMessageId) => {
+        const parts = splitTurn(plan.content)
+        let parent = parentMessageId
+        for (const [i, part] of parts.slice(0, -1).entries()) {
+          await runTurn(creds, roomId, { content: part, model, parentMessageId: parent, signal: request.signal }).catch((error) => {
+            throw Object.assign(error, { partsSent: i })
+          })
+          const state = await readTurn(await join(creds, roomId, { signal: request.signal }), {
+            signal: request.signal,
+            onTimeout: () => stop(creds, roomId),
+          })
+          if (state?.failed) throw new TabbitError(`Tabbit's turn failed on part of a long prompt: ${JSON.stringify(state.failed).slice(0, 300)}`)
+          if (!state?.completed || !state.assistantMessageId) throw new TabbitError("Tabbit's turn was cut before it finished, on part of a long prompt")
+          parent = state.assistantMessageId
+        }
+        await runTurn(creds, roomId, { content: parts[parts.length - 1], model, parentMessageId: parent, signal: request.signal }).catch((error) => {
+          throw Object.assign(error, { partsSent: parts.length - 1 })
         })
-        if (state?.failed) throw new TabbitError(`Tabbit's turn failed on part of a long prompt: ${JSON.stringify(state.failed).slice(0, 300)}`)
-        if (!state?.completed || !state.assistantMessageId) throw new TabbitError("Tabbit's turn was cut before it finished, on part of a long prompt")
-        parent = state.assistantMessageId
+        return await join(creds, roomId, { signal: request.signal })
       }
-      await runTurn(creds, roomId, { content: parts[parts.length - 1], model, parentMessageId: parent, signal: request.signal })
-      return await join(creds, roomId, { signal: request.signal })
-    }
 
-    let response = null
-    if (plan.room) {
+      let response = null
+      if (plan.room) {
+        try {
+          response = await start(plan.room, plan.parent)
+        } catch (error) {
+          if (error?.status === 409 && error.partsSent === 0) {
+            // The room is still answering something: a turn this plugin gave
+            // up on, or one sent from elsewhere. End it and go again once.
+            await stop(creds, plan.room)
+            await sleep(2000, request.signal)
+            try {
+              response = await start(plan.room, plan.parent)
+            } catch (again) {
+              if (![400, 404, 409].includes(again?.status)) throw again
+            }
+          } else if (![400, 404, 409].includes(error?.status)) throw error
+          if (!response) {
+            // A room that has been reset, dropped or stays busy is replaced,
+            // not reported: the transcript flattens the way a new room needs.
+            plan.content = flatten(plan.history, body)
+            plan.chars = plan.content.length
+            plan.room = null
+            plan.parent = null
+          }
+        }
+      }
+      let room = plan.room
+      if (!room) {
+        room = await createRoom(creds, request.signal)
+        response = await start(room, null)
+      }
+
+      // After a turn the lane is what the room now holds. A turn that went
+      // out but whose answer never came back is remembered as `open`: the
+      // room has the question and a half answer the caller never saw.
+      const keep = (parent, open) =>
+        remember(roomKey, { room, parent, history: plan.history, tools: plan.tools, chars: plan.chars, open })
+
+      if (body?.stream === true) {
+        let ended = false
+        const stream = streamTurn(response, {
+          model,
+          plan,
+          body,
+          signal: request.signal,
+          onEnd: (state) => {
+            ended = true
+            keep(state?.assistantMessageId ?? null, false)
+          },
+          onCancel: () => stop(creds, room),
+          onClose: () => {
+            if (!ended) keep(plan.parent, true)
+            release()
+          },
+        })
+        return new Response(stream, {
+          status: 200,
+          headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" },
+        })
+      }
+
+      // Not streaming: drain the turn, then answer once.
+      let text = ""
+      let reasoning = ""
+      let assistantId = null
+      let ended = false
       try {
-        response = await start(plan.room, plan.parent)
-      } catch (error) {
-        // A room that has been reset or dropped is replaced, not reported:
-        // the transcript flattens the same way a new room needs.
-        if (![400, 404, 409].includes(error?.status)) throw error
-        plan.content = flatten(plan.history, body)
-        plan.room = null
+        for await (const part of turnDeltas(response, { signal: request.signal, onTimeout: () => stop(creds, room) })) {
+          if (part.type === "text") text += part.value
+          else if (part.type === "thinking") reasoning += part.value
+          else if (part.type === "end") {
+            assistantId = part.state.assistantMessageId
+            if (part.state.failed) throw new TabbitError(`Tabbit's turn failed: ${JSON.stringify(part.state.failed).slice(0, 300)}`)
+            if (part.state.truncated) throw new TabbitError("Tabbit's turn was cut before it finished")
+            ended = true
+          }
+        }
+      } finally {
+        keep(ended ? assistantId : plan.parent, !ended)
+        release()
       }
+      const parsed = plan.useTools ? parseToolCalls(text, { allowedNames: plan.allowedNames }) : { text, calls: [] }
+      return Response.json(
+        completionBody(
+          model,
+          parsed.text,
+          reasoning,
+          {
+            prompt_tokens: estimateTokens(plan.content),
+            completion_tokens: estimateTokens(text),
+            total_tokens: estimateTokens(plan.content) + estimateTokens(text),
+          },
+          { calls: parsed.calls },
+        ),
+      )
     }
-    let room = plan.room
-    if (!room) {
-      room = await createRoom(creds, request.signal)
-      response = await start(room, null)
-    }
-
-    if (body?.stream === true) {
-      const stream = streamTurn(response, {
-        model,
-        plan,
-        body,
-        signal: request.signal,
-        onEnd: (state) => remember(roomKey, room, plan.history, state?.assistantMessageId ?? null, plan.toolsKey),
-        onCancel: () => stop(creds, room),
-      })
-      return new Response(stream, {
-        status: 200,
-        headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" },
-      })
-    }
-
-    // Not streaming: drain the turn, then answer once.
-    let text = ""
-    let reasoning = ""
-    let assistantId = null
-    for await (const part of turnDeltas(response, { signal: request.signal, onTimeout: () => stop(creds, room) })) {
-      if (part.type === "text") text += part.value
-      else if (part.type === "thinking") reasoning += part.value
-      else if (part.type === "end") {
-        assistantId = part.state.assistantMessageId
-        if (part.state.failed) throw new TabbitError(`Tabbit's turn failed: ${JSON.stringify(part.state.failed).slice(0, 300)}`)
-        if (part.state.truncated) throw new TabbitError("Tabbit's turn was cut before it finished")
-      }
-    }
-    remember(roomKey, room, plan.history, assistantId, plan.toolsKey)
-    const parsed = plan.useTools ? parseToolCalls(text, { allowedNames: plan.allowedNames }) : { text, calls: [] }
-    return Response.json(
-      completionBody(
-        model,
-        parsed.text,
-        reasoning,
-        {
-          prompt_tokens: estimateTokens(plan.content),
-          completion_tokens: estimateTokens(text),
-          total_tokens: estimateTokens(plan.content) + estimateTokens(text),
-        },
-        { calls: parsed.calls },
-      ),
-    )
   }
 
-  function remember(key, room, history, parent, toolsKey = "") {
+  function remember(key, lane) {
     if (!key) return
     pruneRooms()
-    rooms.set(key, { room, parent, sent: history, toolsKey, at: Date.now() })
+    rooms.delete(key)
+    rooms.set(key, laneOf(lane))
+    saveRooms(roomsPath, rooms)
   }
 
 
@@ -590,7 +737,7 @@ function createPlugin() {
 
     auth: {
       provider: ID,
-      maxConcurrency: 1,
+      maxConcurrency: CONCURRENCY,
       async loader(getAuth) {
         return {
           baseURL: CHAT_BASE,
@@ -698,4 +845,7 @@ export const _internal = {
   estimateTokens,
   pruneRooms,
   rooms,
+  locks,
+  formatContinuation,
+  CONCURRENCY,
 }
