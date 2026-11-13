@@ -65,7 +65,7 @@ function installFetch({ onCall } = {}) {
 
 const auth = { type: "api", key: "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1LTEifQ.sig", metadata: { userId: "u-1" } }
 
-test("config declares tabbit as an OpenAI-compatible provider with Gemini-4-Carbon bootstrap", async () => {
+test("config declares tabbit as an OpenAI-compatible provider with the Gemini 4 bootstrap", async () => {
   const hooks = await TabbitPlugin()
   const cfg = { provider: {} }
   await hooks.config(cfg)
@@ -73,7 +73,7 @@ test("config declares tabbit as an OpenAI-compatible provider with Gemini-4-Carb
   assert.equal(p.name, "Tabbit")
   assert.equal(p.npm, "@ai-sdk/openai-compatible")
   assert.ok(p.api.endsWith("/api/v3/chat"))
-  assert.deepEqual(Object.keys(p.models), ["Gemini-4-Carbon"])
+  assert.deepEqual(Object.keys(p.models), ["Gemini-4-Carbon", "Gemini-4-Argon"])
 })
 
 test("planTurn continues a room only when the transcript does", () => {
@@ -192,7 +192,7 @@ test("a streaming request comes back as OpenAI chunks ending in [DONE]", async (
   }
 })
 
-test("the model list defaults to Gemini-4-Carbon only, and TABBIT_MODELS=all exposes full catalog", async () => {
+test("the model list defaults to the Gemini 4 models only (here Carbon), and TABBIT_MODELS=all exposes full catalog", async () => {
   const { restore } = installFetch()
   const prev = process.env.TABBIT_MODELS
   try {

@@ -103,7 +103,8 @@ continues the same Tabbit room with `[tool result ...]` deltas on subsequent
 steps.
 
 **Model filtering & limits.** By default `DEFAULT_ONLY_MODELS` exposes
-`Gemini-4-Carbon` (`1M` context / `64k` output on `web.tabbit.ai`). Set
+`Gemini-4-Carbon` and `Gemini-4-Argon` (`1M` context / `64k` output each on
+`web.tabbit.ai`; a model the account's catalog doesn't list is left out). Set
 `TABBIT_MODELS=all` (or a comma-separated list of `display_name`s) to expose
 additional models from the account's live catalog (`TABBIT_CONTEXT`,
 `TABBIT_OUTPUT` default to 128k / 32k for unlisted models).

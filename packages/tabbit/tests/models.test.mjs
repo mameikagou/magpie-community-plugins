@@ -52,10 +52,11 @@ test("known limits win over the default, and the default is used otherwise", () 
   assert.deepEqual(other.limit, { context: 12345, output: 678 })
 })
 
-test("the bootstrap catalog exposes only Gemini-4-Carbon with 1M context", () => {
-  assert.deepEqual(BOOTSTRAP.map((m) => m.display_name), ["Gemini-4-Carbon"])
+test("the bootstrap catalog exposes the Gemini 4 models with 1M context", () => {
+  assert.deepEqual(BOOTSTRAP.map((m) => m.display_name), ["Gemini-4-Carbon", "Gemini-4-Argon"])
   const rows = rowsOf(BOOTSTRAP)
-  assert.deepEqual(Object.keys(rows), ["Gemini-4-Carbon"])
+  assert.deepEqual(Object.keys(rows), ["Gemini-4-Carbon", "Gemini-4-Argon"])
+  assert.equal(rows["Gemini-4-Argon"].limit.context, 1048576)
   assert.equal(rows["Gemini-4-Carbon"].limit.context, 1048576)
   assert.equal(rows["Gemini-4-Carbon"].limit.output, 65536)
   assert.equal(rows["Gemini-4-Carbon"].tool_call, true)

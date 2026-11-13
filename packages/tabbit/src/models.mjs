@@ -36,9 +36,10 @@ const LIMITS = {
   "DeepSeek-V4-Pro": { context: 1048576, output: 32768 },
 }
 
-// Default model allowlist: only expose overseas Tabbit's Gemini-4-Carbon unless
-// TABBIT_MODELS="all" or a custom comma-separated list is set.
-export const DEFAULT_ONLY_MODELS = ["Gemini-4-Carbon"]
+// Default model allowlist: only expose overseas Tabbit's Gemini 4 models
+// (Carbon and Argon) unless TABBIT_MODELS="all" or a custom comma-separated
+// list is set.
+export const DEFAULT_ONLY_MODELS = ["Gemini-4-Carbon", "Gemini-4-Argon"]
 
 export function allowedModels(raw = process.env.TABBIT_MODELS) {
   if (typeof raw === "string") {
@@ -54,6 +55,7 @@ export function allowedModels(raw = process.env.TABBIT_MODELS) {
 // the check script sees a non-empty config. The live catalog replaces it.
 export const BOOTSTRAP = [
   { display_name: "Gemini-4-Carbon", supports_images: true, supports_tools: true, support_thinking: true, model_access_type: "free_metered", display_multiplier: 1.1 },
+  { display_name: "Gemini-4-Argon", supports_images: true, supports_tools: true, support_thinking: true, model_access_type: "free_metered", display_multiplier: 1.1 },
 ]
 
 const clean = (v) => (typeof v === "string" ? v.trim() : "")
