@@ -177,6 +177,21 @@ The preview is for development only; the plugin uses the same service internally
 - **Bees**: providers as hives and sessions as bees; subagents become smaller
   bees, size follows tokens, and hovering a hive highlights its bees.
 
+## Switching views
+
+The hero header has a view picker instead of a wall of tabs. Press **V** (or
+click it), type to filter by name / eyebrow / group, press Enter to switch, or
+hit **随机一个** for a random view. The 21 views are grouped into
+`实时` / `用量` / `结构` / `趣味`, and the hero accent follows the group.
+**G** starts or stops an auto tour (5 / 10 / 30-second interval in settings),
+**R** picks a random view, **F** stars the current view (favourites pin to the
+top of the picker and survive reloads), **?** opens the shortcut sheet, and
+**Esc** closes the picker.
+
+| View picker | Keyboard shortcuts |
+| --- | --- |
+| ![view menu](docs/view-menu.png) | ![shortcuts](docs/help.png) |
+
 ## Styles and themes
 
 | Control | Pixel |
@@ -187,11 +202,28 @@ The preview is for development only; the plugin uses the same service internally
 | --- | --- |
 | ![paper](docs/style-paper.png) | ![neon](docs/style-neon.png) |
 
+| Terminal | Blueprint |
+| --- | --- |
+| ![terminal](docs/style-terminal.png) | ![blueprint](docs/style-blueprint.png) |
+
+| Zine | Game Boy (pixel light) |
+| --- | --- |
+| ![zine](docs/style-zine.png) | ![game boy](docs/style-pixel-light.png) |
+
 - **Control**: glass cards, iris/cyan accents, balanced density.
-- **Pixel**: hard 2 px borders, 4 px hard shadows, monospace, scanlines, Game Boy
-  green. Light variant is a daylight Game Boy.
+- **Pixel**: 8-bit console — 2 px frames, offset block shadows, dither pattern,
+  segmented meters, uppercase mono, heavy CRT raster; the light variant is a
+  Game Boy DMG screen.
 - **Paper**: cream, serif, brown ink, paper grain; a report-like dark variant.
-- **Neon**: black, magenta/cyan glow, radar-friendly; a daylight variant.
+- **Neon**: cyberpunk black glass — magenta/cyan split lighting, HUD corner
+  brackets, a perspective grid floor and chromatic-aberration titles.
+- **Terminal**: phosphor CRT — green bloom on numbers, block cursor on card
+  heads, hard raster, monospace everywhere; light variant is a day terminal.
+- **Blueprint**: drafting table — navy vellum, 24 px graph grid, dashed inner
+  frames, ruler ticks, no glow; light variant is a day print.
+- **Zine**: risograph cut-out — newsprint with halftone dots, 2 px ink borders,
+  hard offset shadows, one spot red, highlighter titles; dark variant is
+  black-ink newsprint.
 
 Use the **明暗** button for light/dark and the **风格** button for a pack. Both
 choices persist separately.
@@ -247,6 +279,10 @@ them for five minutes. No prompt or response body is read.
 
 No prompts, replies, credentials or model-call keys are stored. The service
 listens on loopback; the plugin page reaches it through its own origin.
+
+Steady-state polling is incremental: after the first snapshot, the service sends
+only the new trace routes, the new ledger rows and a quota-history hash, so a
+2.5-second poll is ~23 KB instead of ~150 KB.
 
 ### Privacy
 
