@@ -187,8 +187,12 @@ request doesn't simply continue the room, it is still sent there, with a note:
 
 - the same request again (the answer didn't arrive): "answer it again";
 - an answer that was cut before it reached the caller: "disregard it";
-- a rewritten history (compacted, edited): "the transcript was rewritten",
-  then the whole transcript, flattened;
+- a compacted history (a context manager such as billion-context folded older
+  messages into summaries): only what follows the last assistant reply — the
+  room still holds the originals, so nothing is resent
+  (`TABBIT_COMPACTION=rewrite` restores the full resend below);
+- a history with no assistant reply that doesn't match (another conversation):
+  "the transcript was rewritten", then the whole transcript, flattened;
 - a changed tool list: only the tools added, changed or removed.
 
 A new room is opened only for a new session, after a week, when a room has

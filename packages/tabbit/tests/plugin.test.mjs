@@ -102,6 +102,39 @@ test("a rewritten transcript stays in its room, with a note and the whole transc
   assert.match(plan.content, /全新的话题/)
 })
 
+test("a compacted transcript sends only what follows the last reply, into the same room", () => {
+  const sent = [
+    { role: "system", content: "sys" },
+    { role: "user", content: "很长的早期内容" },
+    { role: "assistant", content: "早期回复" },
+    { role: "user", content: "第二问" },
+    { role: "assistant", content: "第二答" },
+  ]
+  const entry = { room: "room-1", parent: "a2", sent, at: 1000, chars: 100 }
+  const plan = _internal.planTurn(entry, [
+    { role: "system", content: "sys" },
+    { role: "user", content: "[摘要] 早期讨论了 X" },
+    { role: "assistant", content: "第二答" },
+    { role: "user", content: "第三问" },
+  ], 2000)
+  assert.equal(plan.room, "room-1")
+  assert.equal(plan.parent, "a2")
+  assert.equal(plan.mode, "compacted")
+  assert.equal(plan.content, "第三问")
+  assert.doesNotMatch(plan.content, /rewritten|摘要/)
+})
+
+test("TABBIT_COMPACTION=rewrite keeps the full resend", () => {
+  const entry = { room: "room-1", parent: "a2", sent: [{ role: "user", content: "x" }, { role: "assistant", content: "y" }], at: 1000 }
+  process.env.TABBIT_COMPACTION = "rewrite"
+  try {
+    const plan = _internal.planTurn(entry, [{ role: "user", content: "[摘要]" }, { role: "assistant", content: "y" }, { role: "user", content: "z" }], 2000)
+    assert.equal(plan.mode, "rewrite")
+  } finally {
+    delete process.env.TABBIT_COMPACTION
+  }
+})
+
 test("a retry of the same request stays in its room and asks again", () => {
   const sent = [{ role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" }]
   const entry = { room: "room-1", parent: "a2", sent, at: 1000 }

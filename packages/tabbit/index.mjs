@@ -270,7 +270,9 @@ function formatContinuation(added, useTools, ch) {
 //   - the transcript continues what the room was sent: only the new messages;
 //   - it is exactly what the room was last sent: a retry, with a note and the
 //     last message again;
-//   - anything else (compacted, edited, another conversation): a note that the
+//   - compacted (older messages folded into summaries by a context manager):
+//     only what follows the last assistant reply — the room has the originals;
+//   - anything else (another conversation): a note that the
 //     transcript was rewritten, then the whole of it — still the same room;
 //   - no room yet, or the room is full: a new room with the whole transcript.
 // A changed tool list is a note in front of whatever goes into an old room.
@@ -330,6 +332,16 @@ function planTurn(entry, messages, now = Date.now(), body = null) {
         }
       }
     }
+    // Compacted: the caller (a context manager such as billion-context) folded
+    // older messages into summaries, so the prefix no longer matches — but the
+    // room still holds the originals. Send only what follows the last
+    // assistant reply (the room's own), exactly as a normal continuation.
+    const compacted = compactedTail(history, useTools, ch)
+    if (compacted) {
+      const plan = into(live.open ? `${NOTE_INTERRUPTED}\n\n${compacted}` : compacted, "compacted")
+      if (plan) return plan
+      return fresh(base, history, body, "full", live.room)
+    }
     // Rewritten: the same room, told to start over from the transcript.
     const content = `${NOTE_REWRITTEN}\n\n${flatten(history, body)}`
     if (fits(content)) {
@@ -338,6 +350,24 @@ function planTurn(entry, messages, now = Date.now(), body = null) {
     return fresh(base, history, body, "full", live.room)
   }
   return fresh(base, history, body, "new")
+}
+
+// compactedTail is what follows the transcript's last assistant message, when
+// that holds something new (a user message or tool result); null otherwise —
+// no assistant message at all means another conversation, not a compaction.
+// TABBIT_COMPACTION=rewrite turns this off (the old full resend).
+function compactedTail(history, useTools, ch) {
+  if (process.env.TABBIT_COMPACTION === "rewrite") return null
+  let last = -1
+  for (let i = history.length - 1; i >= 0; i--)
+    if (history[i].role === "assistant") {
+      last = i
+      break
+    }
+  if (last < 0) return null
+  const tail = history.slice(last + 1).filter((m) => m.role !== "system")
+  if (!tail.some((m) => !isTimeNote(m))) return null
+  return formatContinuation(tail, useTools, ch)
 }
 
 // fresh is a turn into a new room: the whole transcript. `mode` is "new" for
