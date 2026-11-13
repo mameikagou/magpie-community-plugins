@@ -12,7 +12,7 @@
 
 - 做 `auth`：复用 magpie 里已登录的百度账号（零操作），或浏览器粘贴 Cookie。
 - 做 `usage`：读 `/api/user/agent/balance`，显示席位 / 增购 / 赠送 / 独立积分包。
-- 做模型：插件自己在 `127.0.0.1:3427` 起一个 OpenAI 兼容口，直连 Comate 的 HTTP API（`/autowork/v2/execute`）。**没有独立服务进程**，端口随插件生死。
+- 做模型：走 magpie 标准的 `auth.loader.fetch`——magpie 把 OpenAI 格式请求交进来，插件翻译成 Comate 的 `/autowork/v2/execute`，再把结果（含 `tool_calls`）翻回去。**不起任何本地端口、没有独立进程**。
 - 不改 magpie 的 provider 配置，只写一份用量缓存 `comate-usage-cache.json`（在 magpie 的 data 目录）。卸载干净：`magpie plugin rm magpie-comate-auth`。
 
 ## 安装
@@ -65,10 +65,30 @@ plugin-version: zulucli-4.13.0
 license 就是 `/api/user` 返回的那串 UUID，和额度卡片共用同一份 cookie。
 
 ```
-magpie ──OpenAI 格式──▶ 127.0.0.1:3427（插件内）──▶ Comate HTTP API
+agent ──OpenAI 格式──▶ magpie 网关 ──▶ 插件 auth.loader.fetch ──▶ Comate HTTP API
 ```
 
-`GET /v1/models` 与 `POST /v1/chat/completions`（含 SSE 流式）都支持。
+流式、非流式、工具调用都支持。**工具由 agent 自己执行**（magpie 只调 `config`/`auth`/`provider.models`/`chat.headers`，
+插件的 `tool` 钩子不会被调用），插件只负责把 `body.tools` 那侧的名字翻译过来、把 `FUNCTION_CALL` 翻成 `tool_calls`。
+
+**工具名映射**：Comate 内置工具（`Glob`/`Read`/`Bash`/`WebSearch`…）→ OpenAI 工具名
+（`search_files`/`read_file`/`terminal`/`web_search`…）。Hermes 执行完回传 `role:"tool"` 消息，
+插件再按 `tool_call_id` 找回原会话与原始 `name`/`params`，填进 `toolUseResults` 继续跑。
+**没映射的工具直接丢掉**（如 `Skill`），否则客户端会报 `Model generated invalid tool call: Skill`。
+
+**两种模式要分开用**：
+
+| 客户端带 `tools` | 用的 agentId | 行为 |
+|---|---|---|
+| 不带 | 8（Ask） | 纯问答，systemReminder 明确「没有工具、只回文本」 |
+| 带 | 1（Agent） | 允许调工具，`FUNCTION_CALL` 翻成 `tool_calls` |
+
+Agent 模式的模型**不管有没有 tools 都会自己调工具**，所以纯聊天必须走 Ask，否则正文是 `null`（工具调用被过滤光了）。
+
+**会话怎么认**（按优先级）：① `tool_call_id` 反查（工具回传那一轮）；② `prompt_cache_key` /
+`x-session-id` / `x-conversation-id` / `x-thread-id`；③ **兜底用上一轮 assistant 文本的 hash**
+（客户端下一轮必然把它原样带回来）。只有 ①② 的话，Hermes 不带 session key 时会每轮开新会话，
+用户看到的就是「我这边没有你之前的对话内容」。
 
 **多轮**：`conversationId` 就是会话标识，续会话时只发最后一句增量，历史留在服务端。
 认会话的优先级：
@@ -80,11 +100,12 @@ magpie ──OpenAI 格式──▶ 127.0.0.1:3427（插件内）──▶ Comat
 
 其他实情：
 
-- 单轮约 **1.4~2.8 秒**，1.5 万字长文约 **2 秒**（没有进程开销、没有命令行长度限制）。
+- 单轮约 **1.4~2.8 秒**；工具调用一轮约 **1.6~2.2 秒**；1.5 万字长文约 **2 秒**（没有进程开销、没有命令行长度限制）。
+- **参数是增量片段**：`FUNCTION_CALL_PARAMS_APPEND` 里的 `input` 会像 `{"pattern":"package"}` → `{"pattern":".json"}` → `{"pattern":""}` 这样来，空串是收尾标记。要按 key 拼接字符串、跳过空串，否则拿到的是空参数。
 - `modelKey` 是服务端的完整模型 ID（`<type>_<hash>`），随服务端版本变；对不上时重跑一次 `zulu list-model` 更新。
-- `tool_call: false`：接口只暴露 Ask（纯问答），agent 能力不映射成 OpenAI tools 协议。
+- 模型声明 `capabilities: { toolcall: true }`；`api.id` 填服务端认的 `<type>_<hash>`，展示用的 `id` 另给。
 - 会话映射存在内存里（最多 300 条，LRU），magpie 重启后旧会话接不上，会当新会话处理。
-- **图片**：暂未接入（`contexts` 字段的图片格式未验证），视觉模型目前按纯文本处理。
+- **图片**：视觉模型支持。`image_url`（data URL）先 `POST /autowork/v1/file/upload`（body 是 `{fileName, contentType, scene:"Composer", fileData:"data:...;base64,..."}`）换 file id，再在 execute 的 `contexts[type=IMAGE]` 里引用 `imageIds` + `images[{id,name,url}]`。实测 1.9 秒正确识别。
 
 > 早期版本走的是官方 CLI `@comate/zulu`（`zulu run --mode Ask`），每轮 spawn 一个进程，
 > 慢 4~11 秒，还受 Windows 32k 命令行上限和附件语义困扰。2026-11 换成上面的直连实现后这些问题都没有了。

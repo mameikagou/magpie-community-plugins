@@ -66,9 +66,10 @@ Magpie 写入：
 
 ```text
 ~/.magpie-agent/hindsight/state.json
+~/.magpie-agent/hindsight/state.json.bak
 ```
 
-状态文件包含恢复所需的原始 API key 和 gateway key，因此不要分享。日志不会输出这些密钥。不支持或已损坏的桥接不会触发数据库写入。
+每次成功写入主状态后会同时写入一份 `state.json.bak` 备份；如果备份写入失败，主状态仍然有效，插件会继续同步。主文件缺失或无法解析时，插件会从备份恢复并修复主文件。状态文件和备份都包含恢复所需的原始 API key 和 gateway key，因此都不要分享。日志不会输出这些密钥。如果主文件和备份都无法解析，插件会停止写库并记录错误，避免在丢失恢复信息的情况下继续操作。不支持或已损坏的桥接不会触发数据库写入。
 
 ## 写入 Hindsight
 
@@ -142,7 +143,7 @@ Hindsight 前端会缓存设置。下一次对话或总结通常已读取数据�
 - `~/.magpie-agent/hindsight/state.json` 存在，当前账号的 `connected` 为 `true`。
 - Hindsight 设置中的 `endpoint` 不是空值，并且 `externalProfiles` 中有 `Magpie · ...` 档案。
 
-如果 `bridge.json` 已存在但 `state.json` 不存在，重启一次 Magpie，让插件后台进程重新加载；必要时在 Agents 页断开再连接。后台通常会在 2 秒内完成第一次同步。
+如果 `bridge.json` 已存在但 `state.json` 不存在，插件会先尝试从 `state.json.bak` 恢复；两者都不存在时才视为首次连接。也可以重启一次 Magpie，让插件后台进程重新加载；必要时在 Agents 页断开再连接。后台通常会在 2 秒内完成第一次同步。
 
 ### 对话返回 400，日报/周报正常
 

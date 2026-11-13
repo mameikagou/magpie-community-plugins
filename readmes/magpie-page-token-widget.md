@@ -1,19 +1,21 @@
 # magpie-page-token-widget
 
+> [English](README.en.md) · 中文
+
 把 iPhone 桌面的额度组件接进 Magpie：装上这个插件，扫一次码，手机上就能显示 Codex、MiniMax、GLM 各家套餐的剩余额度与真实 Token 用量。
 
 装这个插件不需要再跑安装脚本、装 Node.js、建计划任务或开 Tailscale 端口转发。插件自己把服务跑起来，自己找到尾网地址，手机扫一次码就配对好了。
 
 > 数据来自你自己的 Magpie，脚本里不含任何密钥。组件显示的仍是 Magpie 的口径。
 
-![插件页面](docs/console.png)
+插件页长这样：上面是扫码配对，下面依次是状态、数据更新、网络连接、设备管理、显示哪些订阅、高级设置。
 
 ## 它做什么
 
 - 插件页给出一个二维码。用 iPhone 的相机扫一下，Safari 打开配对页，下载组件脚本，用 Scriptable 打开它，长按桌面加组件就行了。
 - 组件里显示每家订阅的剩余额度、5 小时与周额度窗口的百分比、重置倒计时、今日 Token、七日趋势和各家排行。参数可以选订阅（`codex`、`minimax`、`glm`，或 `codex@账号名`），也可以把百分比换成已用（`|used`）。
-- 插件页还能改中号和大号组件里显示哪些订阅，能看到 Tailscale 的状态和同一尾网里的 iPhone。
-  - 勾一个厂商＝这个厂商的所有账号都显示；只勾一个账号＝只有这个账号。勾选框显示的就是手机上会出现的卡片。
+- 插件页是一个配置中心，分五块：**订阅展示**（勾选手机上要出现的卡片）、**数据更新**（多久读一次）、**网络连接**（尾网状态、连接路径、本机网卡）、**设备管理**（已配对的手机，可单独撤销）、**高级设置**（端口、网关等少改的参数）。
+- 点一下手机上的组件，Safari 会打开手机版用量页：每家订阅的剩余额度、今日与近七日的 Token、模型／厂商／客户端排行，和电脑上看到的是同一份数据。
 - 服务只读 Magpie 的本地接口，只在本机打开，手机经 Tailscale 的端口转发进来，令牌存放在 Magpie 自己的目录里。
 
 ## 需要什么
@@ -44,15 +46,66 @@ magpie plugin add ./magpie-page-token-widget
 4. 在「文件」App 里打开刚下载的 `UsageWidget.js`，选「共享 → 用 Scriptable 打开」。
 5. 长按 iPhone 桌面空白处，添加 Scriptable 小组件，选择 `UsageWidget`。
 
-配对码只能用一次。手机装好组件后码就失效了；再生成一个就能装第二台。脚本里只有一个一次性配对码，第一次运行时换成自己的令牌，存进 Scriptable 的钥匙串。
+配对码只能用一次，而且只活十分钟：十分钟之后它就废了，插件页会自己换一个新的出来（不用手点），所以第一次配对不用先去点「重新生成配对码」；用掉之后旧码立刻作废。**每配一台手机，它都会拿到属于自己的那枚只读令牌**，服务端只留这枚令牌的哈希，明文只在配对的那一次出现，之后再也拿不出来。一台手机作废，只停这一台。
 
-不想扫码也行：插件页上有「只读令牌」，把它和「服务地址」填进 `scriptable/SetupUsageWidget.js`（在 Scriptable 里新建一个脚本粘贴运行）也行。
+0.1 时代那枚给所有手机共用的共享令牌已经没有了：升级之后它立刻作废，手里还拿着旧令牌的手机要重新扫一次码配对，重新拿到自己的令牌。
+
+猜配对码是没有便宜的：同一个配对码连续猜错十次就锁五分钟，锁的是这个码本身，不是那台机器。原因是转发过来的手机在服务器看来都是本机的回环地址，按地址锁的话，尾网上任何一个人猜错十次就能把所有人的配对都关上。请求头里的 `X-Forwarded-For` 谁都能写，服务器不看它。
+
+服务还有一本总账：五分钟里猜错一百次（不管猜的是哪个码），配对页、组件脚本和配对接口一起先关上，等五分钟满了自动恢复。电脑上点一次「重新生成配对码」会把总账清空，手动马上就能再配。真正让配对码难猜的不是这两道门，而是它有九十六位随机数、只活十分钟、只能用一次。
+
+手机脚本把令牌存在 Scriptable 的钥匙串里，同一台 iPhone 上的三个组件共用这一枚令牌。
+
+不想扫码也行：插件页的「设备管理」里可以给某台手机单独发一枚令牌，把它和「服务地址」填进 `scriptable/SetupUsageWidget.js`（在 Scriptable 里新建一个脚本粘贴运行）也行。
+
+## 设备管理
+
+「设备管理」里列出所有配过的设备：名字、什么时候配的、最后一次是什么时候、什么时候撤销的。每一条都能改名字，都能单独撤销；撤销一台手机，别的手机照常读数。想加一台新手机，点「给这台手机一个令牌」，把生成的那枚明文令牌填进手机即可（只显示这一次）。
+
+## 数据更新
+
+服务不会每个手机请求都去读一遍 Magpie。它拿着一份快照，快照一分钟内是新鲜的，直接给；过期了才去读，而且所有同时来的请求共用同一次读取。
+
+读的时候最多等两三秒：读回来了就立刻给新的；还没回来就先给旧的，标成「旧数据」，后台继续读。
+
+平时多久读一次可以选：
+
+| 策略 | 说明 |
+|---|---|
+| 智能更新（默认） | 有人看的时候每分钟一次；十分钟没人看改成五分钟一次；半小时没人看就基本不自己读了，等有人来再说 |
+| 每分钟 | 固定每分钟读一次 |
+| 每两分钟 | 固定每两分钟读一次 |
+| 每五分钟 | 固定每五分钟读一次 |
+
+在插件页改一下就立刻生效，不用重启 Magpie。
+
+## 网络连接
+
+「网络连接」里能看到：Tailscale 装没装、连上没有、本机的尾网地址、MagicDNS 名字、同一尾网里的 iPhone，以及现在这通连接走的是哪条路。
+
+连接分三种，看的时候别混：
+
+- **直连（Direct）**：Tailscale 在两台机器之间直接加密通信，通常是同一个局域网里自动找到对方地址之后走这条路，最快。
+- **经由尾网中继设备（Peer Relay）**：两台机器之间没有直连路径，借了尾网里第三台设备转发。
+- **经由 Tailscale 中继服务器（DERP）**：连不上也没有中继设备时，流量走 Tailscale 自己的中继服务器兜底，最慢但最稳。
+
+读不出来的时候显示「还不知道」，不猜。「诊断连接」按钮会真的 ping 一次那台手机，把结果写出来；平时不会自己 ping，省得一直起 Tailscale 子进程。
+
+本机的网卡也在这一块里列着：网卡名、IPv4、IPv6、子网前缀、是 Tailscale 网卡还是 Wi-Fi／有线／虚拟网卡。**这些地址只给电脑上的你看，手机接口拿不到。** 列出它们是为了排障：手机连不上的时候，先看看这台电脑在局域网里的地址，再看尾网地址是不是变了。
+
+**默认仍然走 Tailscale**，不会因为这台电脑有个 192.168.x.x 就让手机改走局域网直连。原因是：局域网直连要处理明文 HTTP（或另配 HTTPS）、DHCP 换地址、iOS 的本地网络权限等等一串事情，做不好就是新的安全口子；而且尾网地址在手机和电脑上都是稳的。局域网直连这次没有实现，只做了地址发现。
+
+## 手机上的用量页
+
+点一下桌面上的组件，Safari 会打开手机版的用量页：每家订阅的剩余额度、今日与近七日的 Token、模型／厂商／客户端排行，和电脑上看到的是同一份数据。
+
+页面用组件里的那个只读令牌打开，令牌只走地址栏的 `#token=` 一段，页面打开后立刻把它抹掉，之后由 Scriptable 自己记着。手机版页面只在尾网这一侧提供，电脑上的控制台仍然只在本机。
 
 ## 组件参数
 
 | 尺寸 | 内容 | Widget Parameter |
 |---|---|---|
-| 小号 | 单家额度、重置倒计时、今日 Token | `codex`（默认）、`minimax`、`glm`；某账号写作 `codex@账号名`；加 `|used` 改显已用 |
+| 小号 | 单家额度、重置倒计时、今日 Token | `codex`（默认）、`minimax`、`glm`；某账号写作 `codex@账号名`；加 `\|used` 改显已用 |
 | 中号 | 每页最多 6 个；1–4 个并排，5–6 个两行三列；今日 Token | 留空；`page=2` 查看第二页 |
 | 大号 | 每页最多 6 个；两列卡片，显示主额度、重置时间及第二窗口百分比；今日与近七日 Token | 留空；`page=2` 查看第二页 |
 
@@ -62,7 +115,7 @@ magpie plugin add ./magpie-page-token-widget
 
 ## 端口
 
-服务默认听 8790。端口上冲突时换一个：
+服务默认听 8790，手机那一侧是 8791。端口上冲突时换一个：
 
 ```bash
 magpie plugin options magpie-page-token-widget '{"port":8890}'
@@ -72,7 +125,25 @@ magpie plugin options magpie-page-token-widget '{"port":8890}'
 
 转发指向的是手机那一侧的端口（默认比服务端口大 1，即 8791），控制台留在 127.0.0.1:8790。尾网里的请求落在这条转发上，不会被当成本机的请求，所以手机看不到控制台，也拿不到令牌。
 
-`tailscale serve --bg --tcp=8790` 是 Tailscale 里的长期设置：它留在那儿，插件被移除或崩溃都不会自己消失，只有插件正常卸载时才会撤掉。想知道现在有哪些转发，看 `tailscale serve status`。
+插件会把自己建的转发记在配置文件里（端口和指向哪里）。重启之后它认得自己的转发，不会重复建；老版本留下的转发会被搬到手机那一侧；别人的转发它既不碰也不删。只有插件正常卸载、并且那条转发仍然指向它记下的地方时，它才会把转发撤掉。
+
+`tailscale serve --bg --tcp=8790` 是 Tailscale 里的长期设置：它留在那儿，插件被移除或崩溃都不会自己消失。想知道现在有哪些转发，看 `tailscale serve status`。
+
+端口是插件启动时听在哪儿的地址，插件自己搬不了家，所以它留在 Magpie 的启动参数里；网关不一样，见下面一节。
+
+## 网关
+
+插件读的是 Magpie 自己的本地接口，默认是 `http://127.0.0.1:3425`。如果你的 Magpie 用的是别的端口，在插件页的**高级设置**里改就行：改完下一次读数就从新地址拿，不用重启，也不用动 Magpie。
+
+网关地址只允许填这台电脑上的 Magpie（`127.0.0.1`、`localhost` 或 `[::1]`），别的地址会被拒绝：这个服务只该读本机的 Magpie，不该从别处取数。
+
+## 兼容性
+
+- 需要 Magpie `0.1.3681` 以上（`package.json` 里写着）。
+- 额度读的是 Magpie 已经缓存好的那份（`/v1/magpie/quotas?kept=1`），不额外去问供应商。
+- 今天的 Token 读 `/v1/magpie/usage?period=today`，一次请求就拿到总数、分时、各厂商和各账号。**老版本 Magpie 没有这个接口时会自动退回老办法**（`/v1/magpie/usage/requests?period=today` 加逐账号的请求），组件上的数字照常有。
+- 七日趋势和模型／厂商排行读 `/v1/magpie/usage/requests?period=7d&limit=1`：这个接口才带 `by.model`、`by.agent` 这些分组，换成别的接口会把排行和趋势丢掉，所以保留。
+- 周期参数 `week` 在 Magpie 里不认（会被当成 30 天），七日要用 `7d`。
 
 ## 卸载
 
@@ -85,89 +156,16 @@ magpie plugin rm magpie-page-token-widget
 ## 隐私
 
 - 服务只读 Magpie 的本地接口（`127.0.0.1:3425`），不写 Magpie 的配置，不碰登录信息。
-- 令牌是本机随机生成的，只读，存在 Magpie 的配置目录里；只有本机的插件页和拿着配对码的手机能拿到。
+- 令牌是本机随机生成的，只读，存在 Magpie 的配置目录里；服务端只留哈希。没有共享令牌：一台手机一枚，撤销哪一枚就只停哪一台。只有这台电脑上的插件页，和带着配对码的手机，才能拿到令牌。
+- 局域网地址只出现在电脑上的控制台里，手机接口不提供。
 - 服务只在本机（127.0.0.1）上监听，手机是经 Tailscale 的转发进来的，没有公网入口，也不需要防火墙规则。
 
 ## 开发
 
 ```bash
-node --test test/service.test.mjs
+npm test
 ```
+
+测试里不会碰真的 Tailscale：所有和 Tailscale 命令打交道的测试都用一个自己的假命令（`test/helpers.mjs` 里的 `mockTailscale`），也不会去改真的 `tailscale serve` 设置。Magpie 网关同样是测试自己起的一个。
 
 `lib/collector.mjs` 和 `lib/normalize.mjs` 来自 [ScriptableTokenWidgets](https://github.com/liuzq1103/ScriptableTokenWidgets)，`lib/vendor/qrcode-generator.cjs` 是 [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator)。详见 [NOTICE](NOTICE)。
-
----
-
-# magpie-page-token-widget (English)
-
-An iPhone home screen widget for Magpie, brought in as a plugin: install the plugin, scan a code, and the widget shows the remaining quota and the real token usage of Codex, MiniMax and GLM.
-
-Installing it needs no install script, no Node.js, no scheduled task and no Tailscale port forwarding. The plugin runs the service itself, finds the tailnet address itself, and the phone pairs by scanning a code once.
-
-## Requirements
-
-- Magpie on the desktop (the plugin host is Bun).
-- Tailscale, with the computer and the iPhone in the same tailnet.
-- [Scriptable](https://scriptable.app/) on the iPhone.
-
-## Install
-
-```bash
-magpie plugin add magpie-page-token-widget
-```
-
-From a checkout: `magpie plugin add ./magpie-page-token-widget`.
-
-## Pair
-
-1. Open the plugin page in Magpie.
-2. The page shows the state of Tailscale. When the computer and the iPhone share a tailnet it shows the tailnet address and a code to scan.
-3. Scan the code with the camera of the iPhone, open the page in Safari and download the widget script.
-4. Open the downloaded `UsageWidget.js` in the Files app and choose "Share → Open with Scriptable".
-5. Long press the home screen, add the Scriptable widget and pick `UsageWidget`.
-
-The pairing code works once. The script carries only that one-time code; on its first run it exchanges the code for a token of its own and keeps it in the keychain of Scriptable.
-
-## Widget parameter
-
-| Size | Shows | Widget Parameter |
-|---|---|---|
-| Small | one quota, the reset countdown, today's tokens | `codex` (default), `minimax`, `glm`; one account is written `codex@<account>`; `\|used` shows what is used |
-| Medium | up to 6 per page; today's tokens | empty; `page=2` for the second page |
-| Large | up to 6 per page; two columns with the quota, the reset and the second window; today's and the last seven days | empty; `page=2` for the second page |
-
-## Lifetime
-
-The service runs as long as Magpie runs. With Magpie closed, the phone keeps the last result it received.
-
-## Port
-
-The service listens on 8790 by default. Pick another one when the port is taken:
-
-```bash
-magpie plugin options magpie-page-token-widget '{"port":8890}'
-```
-
-Restart Magpie afterwards. The plugin publishes the port in the tailnet with a forwarding of Tailscale (`tailscale serve --tcp`), so the phone reaches it on the 100.x address. A forwarding of another service on that port is never touched.
-
-The forwarding points at the phone side of the service (by default one port above the service port, so 8791), while the console stays on 127.0.0.1:8790. A request that comes in through the tailnet lands on that phone port and is never taken for a request of this computer, so the phone cannot read the console or the token.
-
-`tailscale serve --bg --tcp=8790` is a standing setting of Tailscale: it stays there when the plugin is removed or crashes, and only a clean uninstall takes it away. `tailscale serve status` shows what is published right now.
-
-## Uninstall
-
-```bash
-magpie plugin rm magpie-page-token-widget
-```
-
-The forwarding of the plugin is taken away with it.
-
-## Privacy
-
-The service only reads the local API of Magpie (`127.0.0.1:3425`). The token is random, read only and stays in the directory of Magpie. The service listens on this computer only (127.0.0.1); the phone comes in through the forwarding of Tailscale. There is no public entrance and no firewall rule is needed.
-
-## Development
-
-```bash
-node --test test/service.test.mjs
-```
