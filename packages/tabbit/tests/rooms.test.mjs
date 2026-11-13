@@ -15,7 +15,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // A Tabbit that, like the real one, refuses a second run in a room while one
 // is still answering, and answers each turn after `delay` ms.
-function busyTabbit({ delay = 30 } = {}) {
+function busyTabbit({ delay = 30, failRun = null } = {}) {
   const calls = []
   const active = new Set()
   let rooms = 0
@@ -28,6 +28,8 @@ function busyTabbit({ delay = 30 } = {}) {
     calls.push({ method, path: url.pathname, room, body: init.body ? JSON.parse(init.body) : null })
     if (url.pathname === "/api/v3/chat/rooms" && method === "POST") return Response.json({ room_id: `room-${++rooms}` })
     if (url.pathname.endsWith("/runs")) {
+      const fail = failRun?.(calls.filter((c) => c.path.endsWith("/runs")).length, room)
+      if (fail) return Response.json({ detail: "boom" }, { status: fail })
       if (active.has(room)) return Response.json({ detail: { message: "already has an active room run" } }, { status: 409 })
       active.add(room)
       return Response.json({ run_id: "run" })
@@ -235,4 +237,43 @@ test("ROOM_CHARS reads TABBIT_ROOM_CHARS within bounds", async () => {
   assert.equal(roomCharsOf({}), 800_000)
   assert.equal(roomCharsOf({ TABBIT_ROOM_CHARS: "300_000" }), 300_000)
   assert.equal(roomCharsOf({ TABBIT_ROOM_CHARS: "10" }), 800_000)
+})
+
+test("a turn that never releases holds up only the next one, once", async () => {
+  const { serial } = await import("../src/rooms.mjs")
+  const locks = new Map()
+  const order = []
+  serial(locks, "k", async () => order.push("a"), { maxWait: 30 }) // never releases
+  const b = serial(locks, "k", async (release) => (order.push("b"), release()), { maxWait: 30 })
+  const t0 = Date.now()
+  const c = serial(locks, "k", async (release) => (order.push("c"), release()), { maxWait: 5000 })
+  await Promise.all([b, c])
+  assert.deepEqual(order, ["a", "b", "c"])
+  assert.ok(Date.now() - t0 < 1000, "c should not wait out its own maxWait")
+  await new Promise((r) => setTimeout(r, 5))
+  assert.equal(locks.size, 0)
+})
+
+test("a long prompt cut after some parts went in: the room is retired, not filled again", async () => {
+  // The 2nd run (part 2 of 3) fails with 500 after part 1 went in and was answered.
+  const t = busyTabbit({ delay: 1, failRun: (n) => (n === 2 ? 500 : 0) })
+  try {
+    _internal.rooms.clear()
+    const hooks = await TabbitPlugin()
+    const loader = await hooks.auth.loader(async () => auth)
+    const big = "x ".repeat(25_000)
+    const first = await ask(loader, "s-broken", { messages: [{ role: "user", content: big }] })
+    assert.notEqual(first.status, 200)
+    const lane = [..._internal.rooms.values()][0]
+    assert.equal(lane.broken, true)
+    assert.equal(lane.parent, "a1")
+    const again = await ask(loader, "s-broken", { messages: [{ role: "user", content: "short" }] })
+    assert.equal(again.status, 200)
+    const rooms = t.calls.filter((c) => c.path === "/api/v3/chat/rooms")
+    assert.equal(rooms.length, 2)
+    const stops = t.calls.filter((c) => c.path.includes("/chat/stop"))
+    assert.ok(stops.length >= 1)
+  } finally {
+    t.restore()
+  }
 })

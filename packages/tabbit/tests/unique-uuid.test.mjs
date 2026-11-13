@@ -41,3 +41,10 @@ test("TABBIT_DEFAULT_BROWSER overrides what the system says", () => {
   assert.equal(isDefaultBrowser({ TABBIT_DEFAULT_BROWSER: "1" }), true)
   assert.equal(isDefaultBrowser({ TABBIT_DEFAULT_BROWSER: "0" }), false)
 })
+
+test("macOS LSHandlers with nested LSHandlerPreferredVersions are read whole", async () => {
+  const { defaultInHandlers } = await import("../src/api.mjs")
+  const h = (scheme, id) => `    {\n        LSHandlerPreferredVersions =         {\n            LSHandlerRoleAll = "-";\n        };\n        LSHandlerRoleAll = "${id}";\n        LSHandlerURLScheme = ${scheme};\n    }`
+  assert.equal(defaultInHandlers(`(\n${h("http", "com.google.chrome")},\n${h("https", "ai.tabbit.browser")}\n)`), true)
+  assert.equal(defaultInHandlers(`(\n${h("https", "com.google.chrome")},\n${h("mailto", "ai.tabbit.browser")}\n)`), false)
+})

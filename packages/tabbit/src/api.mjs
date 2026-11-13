@@ -177,6 +177,18 @@ export function isDefaultBrowser(env = process.env, now = Date.now()) {
   return value
 }
 
+// defaultInHandlers reads `defaults read … LSHandlers` output: one `{ … }` per
+// handler, each possibly holding a nested `LSHandlerPreferredVersions = { … };`
+// — so a handler is a brace block with at most one level of nesting inside.
+export function defaultInHandlers(handlers) {
+  for (const [block] of String(handlers ?? "").matchAll(/\{(?:[^{}]|\{[^{}]*\})*\}/g)) {
+    if (!/LSHandlerURLScheme\s*=\s*https;/.test(block)) continue
+    const top = block.replace(/\{[^{}]*\}/g, (inner, at) => (at === 0 ? inner : ""))
+    return /LSHandlerRoleAll\s*=\s*"?[^;"]*tabbit/i.test(top)
+  }
+  return false
+}
+
 const HTTPS_CHOICE = "HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https\\UserChoice"
 function readDefaultBrowser() {
   const run = (file, args) => execFileSync(file, args, { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] })
@@ -189,7 +201,7 @@ function readDefaultBrowser() {
   }
   if (process.platform === "darwin") {
     const handlers = run("defaults", ["read", "com.apple.LaunchServices/com.apple.launchservices.secure", "LSHandlers"])
-    for (const block of handlers.split(/\}\s*,?/)) if (/LSHandlerURLScheme\s*=\s*https;/.test(block)) return /LSHandlerRoleAll\s*=\s*"?[^;]*tabbit/i.test(block)
+    return defaultInHandlers(handlers)
   }
   return false
 }

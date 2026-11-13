@@ -108,12 +108,12 @@ test("a compacted transcript sends only what follows the last reply, into the sa
     { role: "user", content: "很长的早期内容" },
     { role: "assistant", content: "早期回复" },
     { role: "user", content: "第二问" },
-    { role: "assistant", content: "第二答" },
   ]
   const entry = { room: "room-1", parent: "a2", sent, at: 1000, chars: 100 }
   const plan = _internal.planTurn(entry, [
     { role: "system", content: "sys" },
     { role: "user", content: "[摘要] 早期讨论了 X" },
+    { role: "user", content: "第二问" },
     { role: "assistant", content: "第二答" },
     { role: "user", content: "第三问" },
   ], 2000)
@@ -122,6 +122,33 @@ test("a compacted transcript sends only what follows the last reply, into the sa
   assert.equal(plan.mode, "compacted")
   assert.equal(plan.content, "第三问")
   assert.doesNotMatch(plan.content, /rewritten|摘要/)
+})
+
+test("turns the room never saw (another model's) are not taken for a compaction", () => {
+  const entry = { room: "room-1", parent: "a1", sent: [{ role: "user", content: "一" }], at: 1000 }
+  const plan = _internal.planTurn(entry, [
+    { role: "user", content: "[摘要]" },
+    { role: "user", content: "别的模型那边的问题" },
+    { role: "assistant", content: "别的模型的回答" },
+    { role: "user", content: "回到 Tabbit" },
+  ], 2000)
+  assert.equal(plan.room, "room-1")
+  assert.equal(plan.mode, "rewrite")
+  assert.match(plan.content, /别的模型的回答/)
+})
+
+test("a room left with half a long prompt is retired, not continued", () => {
+  const entry = { room: "room-1", parent: "a1", sent: [{ role: "user", content: "一" }], at: 1000, broken: true }
+  const plan = _internal.planTurn(entry, [{ role: "user", content: "一" }, { role: "assistant", content: "二" }, { role: "user", content: "三" }], 2000)
+  assert.equal(plan.room, null)
+  assert.equal(plan.retired, "room-1")
+})
+
+test("a rewrite into a room that had tools, without tools now, says tools are gone", () => {
+  const entry = { room: "room-1", parent: "a1", sent: [{ role: "user", content: "一" }], at: 1000, tools: { bash: "x" } }
+  const plan = _internal.planTurn(entry, [{ role: "user", content: "全新" }], 2000)
+  assert.equal(plan.mode, "rewrite")
+  assert.match(plan.content, /no longer available/)
 })
 
 test("TABBIT_COMPACTION=rewrite keeps the full resend", () => {

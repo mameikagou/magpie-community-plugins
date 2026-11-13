@@ -42,6 +42,7 @@ import {
   ROOM_CHARS,
   cutOf,
   isTimeNote,
+  lastKeyOf,
   toolHashes,
   laneOf,
   laneFrom,
@@ -291,7 +292,10 @@ function planTurn(entry, messages, now = Date.now(), body = null) {
   const base = { history, toolsKey, useTools, allowedNames, tools }
 
   const lane = laneFrom(entry)
-  const live = lane && now - (lane.at ?? 0) < ROOM_TTL ? lane : null
+  const live = lane && !lane.broken && now - (lane.at ?? 0) < ROOM_TTL ? lane : null
+  // A room left with part of a long prompt in it (a later part failed) holds
+  // text the caller never saw answered; it is retired, not continued.
+  if (lane?.broken && now - (lane.at ?? 0) < ROOM_TTL) return fresh(base, history, body, "full", lane.room)
   // A room that has been given ROOM_CHARS in all is left behind: whatever
   // this turn would have sent into it goes to a new room as the whole
   // transcript instead, the same as a first turn.
@@ -336,14 +340,17 @@ function planTurn(entry, messages, now = Date.now(), body = null) {
     // older messages into summaries, so the prefix no longer matches — but the
     // room still holds the originals. Send only what follows the last
     // assistant reply (the room's own), exactly as a normal continuation.
-    const compacted = compactedTail(history, useTools, ch)
+    const compacted = compactedTail(history, useTools, ch, live)
     if (compacted) {
       const plan = into(live.open ? `${NOTE_INTERRUPTED}\n\n${compacted}` : compacted, "compacted")
       if (plan) return plan
       return fresh(base, history, body, "full", live.room)
     }
-    // Rewritten: the same room, told to start over from the transcript.
-    const content = `${NOTE_REWRITTEN}\n\n${flatten(history, body)}`
+    // Rewritten: the same room, told to start over from the transcript. If
+    // the room had client tools and this request has none, say so too: the
+    // flattened transcript carries no tool protocol to override the old one.
+    const off = !useTools && live.tools ? toolsNote(live.tools, specs, ch, useTools) : ""
+    const content = `${off ? `${off}\n\n` : ""}${NOTE_REWRITTEN}\n\n${flatten(history, body)}`
     if (fits(content)) {
       return { ...base, room: live.room, parent: live.parent ?? null, content, chars: (live.chars ?? 0) + content.length, mode: "rewrite" }
     }
@@ -353,10 +360,12 @@ function planTurn(entry, messages, now = Date.now(), body = null) {
 }
 
 // compactedTail is what follows the transcript's last assistant message, when
-// that holds something new (a user message or tool result); null otherwise —
-// no assistant message at all means another conversation, not a compaction.
+// that reply is the room's own — the message right before it is the last one
+// the room was sent (`lane.last`) — and something new follows it (a user
+// message or tool result); null otherwise: another conversation, another
+// model's turns, or a reply the room never gave, which get the full resend.
 // TABBIT_COMPACTION=rewrite turns this off (the old full resend).
-function compactedTail(history, useTools, ch) {
+function compactedTail(history, useTools, ch, lane) {
   if (process.env.TABBIT_COMPACTION === "rewrite") return null
   let last = -1
   for (let i = history.length - 1; i >= 0; i--)
@@ -365,6 +374,7 @@ function compactedTail(history, useTools, ch) {
       break
     }
   if (last < 0) return null
+  if (lane?.last && lastKeyOf(history, last) !== lane.last) return null
   const tail = history.slice(last + 1).filter((m) => m.role !== "system")
   if (!tail.some((m) => !isTimeNote(m))) return null
   return formatContinuation(tail, useTools, ch)
@@ -621,25 +631,52 @@ function createPlugin() {
       // same room (see src/chunk.mjs). Each earlier part is read to its end:
       // a room takes one run at a time (a part stopped early left the next
       // one refused with 409 "already has an active room run").
+      // `lastParent` follows the parts as they are answered, so a turn cut
+      // later hangs off the last answer the room really gave.
+      let lastParent = plan.parent
+      let counted = null
       const start = async (roomId, parentMessageId) => {
         const parts = splitTurn(plan.content)
         let parent = parentMessageId
-        for (const [i, part] of parts.slice(0, -1).entries()) {
-          await runTurn(creds, roomId, { content: part, model, parentMessageId: parent, signal: request.signal }).catch((error) => {
-            throw Object.assign(error, { partsSent: i })
-          })
-          const state = await readTurn(await join(creds, roomId, { signal: request.signal }), {
-            signal: request.signal,
-            onTimeout: () => stop(creds, roomId),
-          })
-          if (state?.failed) throw new TabbitError(`Tabbit's turn failed on part of a long prompt: ${JSON.stringify(state.failed).slice(0, 300)}`)
-          if (!state?.completed || !state.assistantMessageId) throw new TabbitError("Tabbit's turn was cut before it finished, on part of a long prompt")
-          parent = state.assistantMessageId
+        lastParent = parent
+        // Each part costs its header and the room's "ACK" on top of the text
+        // (counted once per content: a second try of the same text doesn't add).
+        if (parts.length > 1 && counted !== plan.content) {
+          counted = plan.content
+          plan.chars += parts.reduce((n, p) => n + p.length, 0) - plan.content.length + (parts.length - 1) * 8
         }
-        await runTurn(creds, roomId, { content: parts[parts.length - 1], model, parentMessageId: parent, signal: request.signal }).catch((error) => {
+        for (const [i, part] of parts.slice(0, -1).entries()) {
+          try {
+            await runTurn(creds, roomId, { content: part, model, parentMessageId: parent, signal: request.signal })
+          } catch (error) {
+            throw Object.assign(error, { partsSent: i })
+          }
+          try {
+            const state = await readTurn(await join(creds, roomId, { signal: request.signal }), {
+              signal: request.signal,
+              onTimeout: () => stop(creds, roomId),
+            })
+            if (state?.failed) throw new TabbitError(`Tabbit's turn failed on part of a long prompt: ${JSON.stringify(state.failed).slice(0, 300)}`)
+            if (!state?.completed || !state.assistantMessageId) throw new TabbitError("Tabbit's turn was cut before it finished, on part of a long prompt")
+            parent = lastParent = state.assistantMessageId
+          } catch (error) {
+            throw Object.assign(error, { partsSent: i + 1 })
+          }
+        }
+        try {
+          await runTurn(creds, roomId, { content: parts[parts.length - 1], model, parentMessageId: parent, signal: request.signal })
+        } catch (error) {
           throw Object.assign(error, { partsSent: parts.length - 1 })
-        })
+        }
         return await join(creds, roomId, { signal: request.signal })
+      }
+      // Some parts went into the room and the rest didn't: the room now holds
+      // half a prompt. Mark its lane so the next turn retires it to a new room
+      // instead of sending those parts in again on top of them.
+      const broke = (roomId, error) => {
+        if (!(error?.partsSent > 0) || !roomKey) return
+        stop(creds, roomId).catch(() => {})
+        remember(roomKey, { room: roomId, parent: lastParent, history: [], tools: plan.tools, chars: plan.chars, open: true, broken: true })
       }
 
       let response = null
@@ -647,6 +684,7 @@ function createPlugin() {
         try {
           response = await start(plan.room, plan.parent)
         } catch (error) {
+          broke(plan.room, error)
           if (error?.status === 409 && error.partsSent === 0) {
             // The room is still answering something: a turn this plugin gave
             // up on, or one sent from elsewhere. End it and go again once.
@@ -655,12 +693,15 @@ function createPlugin() {
             try {
               response = await start(plan.room, plan.parent)
             } catch (again) {
+              broke(plan.room, again)
               if (![400, 404, 409].includes(again?.status)) throw again
             }
           } else if (![400, 404, 409].includes(error?.status)) throw error
           if (!response) {
             // A room that has been reset, dropped or stays busy is replaced,
             // not reported: the transcript flattens the way a new room needs.
+            // Whatever it may still be answering is stopped first.
+            stop(creds, plan.room).catch(() => {})
             plan.content = flatten(plan.history, body)
             plan.chars = plan.content.length
             plan.retired = plan.room
@@ -672,7 +713,12 @@ function createPlugin() {
       let room = plan.room
       if (!room) {
         room = await createRoom(creds, request.signal)
-        response = await start(room, null)
+        try {
+          response = await start(room, null)
+        } catch (error) {
+          broke(room, error)
+          throw error
+        }
       }
 
       // After a turn the lane is what the room now holds. A turn that went
@@ -702,7 +748,7 @@ function createPlugin() {
           },
           onCancel: () => stop(creds, room),
           onClose: () => {
-            if (!ended) keep(plan.parent, true)
+            if (!ended) keep(lastParent, true)
             release()
           },
         })
@@ -729,7 +775,7 @@ function createPlugin() {
           }
         }
       } finally {
-        keep(ended ? assistantId : plan.parent, !ended)
+        keep(ended ? assistantId : lastParent, !ended)
         release()
       }
       const parsed = plan.useTools ? parseToolCalls(text, { allowedNames: plan.allowedNames }) : { text, calls: [] }

@@ -188,12 +188,17 @@ request doesn't simply continue the room, it is still sent there, with a note:
 - the same request again (the answer didn't arrive): "answer it again";
 - an answer that was cut before it reached the caller: "disregard it";
 - a compacted history (a context manager such as billion-context folded older
-  messages into summaries): only what follows the last assistant reply — the
-  room still holds the originals, so nothing is resent
+  messages into summaries): only what follows the last assistant reply, when
+  that reply is the room's own (the message before it is the last one the room
+  was sent) — the room still holds the originals, so nothing is resent
   (`TABBIT_COMPACTION=rewrite` restores the full resend below);
 - a history with no assistant reply that doesn't match (another conversation):
   "the transcript was rewritten", then the whole transcript, flattened;
 - a changed tool list: only the tools added, changed or removed.
+
+A long prompt whose later parts failed after earlier ones went in leaves its
+room holding half a prompt; that room is retired (archived) and the next turn
+starts a new one.
 
 A new room is opened only for a new session, after a week, when a room has
 been given 800,000 characters in all (`TABBIT_ROOM_CHARS`, 50,000 to

@@ -98,9 +98,20 @@ export function toolHashes(specs) {
 // laneOf is what is remembered of a room after a turn: the transcript it was
 // sent (as a chain), the answer to hang the next turn off, the tool list it
 // knows, how much it has been given, and whether its last turn was cut.
-export function laneOf({ room, parent = null, history = [], tools = null, chars = 0, open = false, at = Date.now() }) {
+export function laneOf({ room, parent = null, history = [], tools = null, chars = 0, open = false, broken = false, at = Date.now() }) {
   const { head, count, trail } = chainOf(history)
-  return { room, parent, count, head, trail, tools, chars, open, at }
+  const lane = { room, parent, count, head, trail, last: lastKeyOf(history), tools, chars, open, at }
+  if (broken) lane.broken = true
+  return lane
+}
+
+// lastKeyOf is the key of the last message in `history` (before `end`) that
+// isn't a time note — for a lane, the last message the room was sent, which
+// its own reply follows. A compacted transcript still has it right before
+// that reply; another conversation (or another model's turns) doesn't.
+export function lastKeyOf(history, end = history.length) {
+  for (let i = end - 1; i >= 0; i--) if (!isTimeNote(history[i])) return keyOf(history[i])
+  return null
 }
 
 // laneFrom reads a remembered entry: a lane, or the {room, parent, sent}
@@ -126,7 +137,11 @@ export function serial(locks, key, task, { maxWait = 10 * 60 * 1000 } = {}) {
   const before = locks.get(key) ?? Promise.resolve()
   let release
   const done = new Promise((resolve) => (release = resolve))
-  const mine = before.then(() => done)
+  let timer
+  const waited = Promise.race([before, new Promise((resolve) => (timer = setTimeout(resolve, maxWait)))]).finally(() => clearTimeout(timer))
+  // The next turn waits on this one's wait, not on the turn before it: a turn
+  // that never releases holds up only the one after it, for maxWait, once.
+  const mine = waited.then(() => done)
   locks.set(key, mine)
   mine.then(() => {
     if (locks.get(key) === mine) locks.delete(key)
@@ -137,8 +152,6 @@ export function serial(locks, key, task, { maxWait = 10 * 60 * 1000 } = {}) {
     released = true
     release()
   }
-  let timer
-  const waited = Promise.race([before, new Promise((resolve) => (timer = setTimeout(resolve, maxWait)))]).finally(() => clearTimeout(timer))
   return waited.then(async () => {
     try {
       return await task(releaseOnce)
