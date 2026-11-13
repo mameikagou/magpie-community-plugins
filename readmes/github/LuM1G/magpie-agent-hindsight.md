@@ -4,7 +4,7 @@
 
 非官方社区插件：把 **Hindsight（后知后觉）** 接入 Magpie 的 Agents 页。你只需在 Magpie 中勾选模型，插件会把配置写入 Hindsight 当前账号的 SQLite 设置，并在连接期间保持同步；断开时恢复原来的 AI 设置。
 
-> 本插件不是 Hindsight 或 Magpie 官方作品。Hindsight 的名称和图标仅用于说明兼容对象，详见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
+> 本插件不是 Hindsight 或 Magpie 官方作品。Hindsight 的名称仅用于说明兼容对象；插件图标为原创设计。
 
 ## 接管范围
 
@@ -34,7 +34,7 @@
 magpie plugin add github:LuM1G/magpie-agent-hindsight
 ```
 
-安装后打开 **Agents → Hindsight**，勾选模型并连接。`0.1.3` 会在插件后台进程加载时立即开始同步；更新后重启一次 Magpie，让托管进程重新加载。桥接路径与 `0.1.2` 相同，已连接时无需重新勾选模型。
+安装后打开 **Agents → Hindsight**，勾选模型并连接。从 `0.1.3` 起，插件会在后台进程加载时立即开始同步；更新后重启一次 Magpie，让托管进程重新加载。桥接路径与 `0.1.2` 相同，已连接时无需重新勾选模型。
 
 ## 桥接与状态文件
 
@@ -184,6 +184,4 @@ npm pack --dry-run
 
 ## 许可
 
-插件源代码使用 MIT 许可，见 [`LICENSE`](./LICENSE)。
-
-Hindsight 官方图标是单独的 GPL-3.0 第三方资产，见 [`LICENSE-GPL-3.0.txt`](./LICENSE-GPL-3.0.txt) 和 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。本插件是社区作品，不代表 Hindsight 或 Magpie 官方。
+插件源代码和图标使用 MIT 许可，见 [`LICENSE`](./LICENSE)。本插件是社区作品，不代表 Hindsight 或 Magpie 官方。

@@ -12,7 +12,7 @@
 
 - 做 `auth`：复用 magpie 里已登录的百度账号（零操作），或浏览器粘贴 Cookie。
 - 做 `usage`：读 `/api/user/agent/balance`，显示席位 / 增购 / 赠送 / 独立积分包。
-- 做模型：插件自己在 `127.0.0.1:3427` 起一个 OpenAI 兼容口，把请求翻译成官方 CLI 的 `zulu run --mode Ask`。**没有独立服务进程**，端口随插件生死；没装 CLI 时自动退化成纯额度卡片。
+- 做模型：插件自己在 `127.0.0.1:3427` 起一个 OpenAI 兼容口，直连 Comate 的 HTTP API（`/autowork/v2/execute`）。**没有独立服务进程**，端口随插件生死。
 - 不改 magpie 的 provider 配置，只写一份用量缓存 `comate-usage-cache.json`（在 magpie 的 data 目录）。卸载干净：`magpie plugin rm magpie-comate-auth`。
 
 ## 安装
@@ -23,13 +23,7 @@ magpie plugin add github:ikashana/magpie-comate-auth
 
 也可以 clone 到本地后 `magpie plugin add <本地目录>`（插件会被原地加载，不拷进 magpie 的 node_modules）。
 
-模型通道依赖官方 CLI，装完插件后要在插件目录里装一次：
-
-```bash
-cd <插件目录> && npm i
-```
-
-（`@comate/zulu` 已在 `dependencies` 里；不装它插件就只当额度卡片，登录与积分照常可用。）
+模型通道**不依赖 CLI**，登录后即可用。`@comate/zulu` 现在只剩一个用途：`zulu list-model` 用来刷新模型 ID（服务端版本变了才需要）。
 
 ## 登录
 
@@ -50,26 +44,50 @@ cd <插件目录> && npm i
 
 ## 模型通道（15 个模型）
 
-Comate 不给外部 API，但官方 CLI `@comate/zulu` 有 `run --mode Ask`（纯问答、不碰文件）。
-插件因此在进程内起一个兼容口：
+Comate 没有公开 API，但它的 IDE 插件走的是普通 HTTPS，这套接口可以直连：
 
 ```
-magpie ──OpenAI 格式──▶ 127.0.0.1:3427（插件内）──▶ zulu run --mode Ask ──▶ Comate 云
+GET  /api/key/valid/<license>                        验票
+POST /api/aidevops/autocomate/rest/autowork/v2/conversation   → conversationId
+POST /api/aidevops/autocomate/rest/autowork/v2/task           → taskId
+POST /api/aidevops/autocomate/rest/autowork/v2/execute        → SSE（ANSWER.delta）
+```
+
+**认证只需要把 license 放进请求头**，没有签名、没有设备绑定、不用换 token：
+
+```http
+login-name: <license>
+Uuap-login-name: <license>
+X-Source: COMATE
+plugin-version: zulucli-4.13.0
+```
+
+license 就是 `/api/user` 返回的那串 UUID，和额度卡片共用同一份 cookie。
+
+```
+magpie ──OpenAI 格式──▶ 127.0.0.1:3427（插件内）──▶ Comate HTTP API
 ```
 
 `GET /v1/models` 与 `POST /v1/chat/completions`（含 SSE 流式）都支持。
 
-**⚠️ 关键坑：必须显式 `HTTP_HOST`。** zulu 的 `API_MAP` 里没有 SaaS 平台这一项，
-默认会掉到内网域名 `comate.baidu-int.com`，表现为 `ENOTFOUND` 或「TLS 连接被断开」。
-插件里固定传 `HTTP_HOST=https://comate.baidu.com`。
+**多轮**：`conversationId` 就是会话标识，续会话时只发最后一句增量，历史留在服务端。
+认会话的优先级：
+
+1. 客户端显式给的会话标识：`prompt_cache_key`，或 `x-session-id` / `x-conversation-id` / `x-thread-id` 头；
+2. 没有就退回指纹：拿「上一轮自己返回的 assistant 文本」做 hash（客户端下一轮必然把它带回来）。
+
+> 刻意**不用** OpenAI 的 `user` 字段当会话 key —— 它是用户身份，拿它当会话会把同一用户的不同对话串成一条。
 
 其他实情：
 
-- 每次请求要拉起一次 CLI 进程，**4~11 秒**（模型越重越慢），不适合高频调用。
-- 多轮对话会被拼成一条 query 发给 Ask 模式，不是真正的 chat session。
-- `tool_call: false`：zulu 的 agent 能力不暴露成 OpenAI tools 协议。
-- 图片模型（Deepseek V4.1 Flash / GLM-5v-Turbo / MiniMax M3 / Kimi K2.6 等）目前只标了
-  `attachment: true`，还没接 `--attach-image`，发图会被忽略。
+- 单轮约 **1.4~2.8 秒**，1.5 万字长文约 **2 秒**（没有进程开销、没有命令行长度限制）。
+- `modelKey` 是服务端的完整模型 ID（`<type>_<hash>`），随服务端版本变；对不上时重跑一次 `zulu list-model` 更新。
+- `tool_call: false`：接口只暴露 Ask（纯问答），agent 能力不映射成 OpenAI tools 协议。
+- 会话映射存在内存里（最多 300 条，LRU），magpie 重启后旧会话接不上，会当新会话处理。
+- **图片**：暂未接入（`contexts` 字段的图片格式未验证），视觉模型目前按纯文本处理。
+
+> 早期版本走的是官方 CLI `@comate/zulu`（`zulu run --mode Ask`），每轮 spawn 一个进程，
+> 慢 4~11 秒，还受 Windows 32k 命令行上限和附件语义困扰。2026-11 换成上面的直连实现后这些问题都没有了。
 
 ## 接口（实测）
 
