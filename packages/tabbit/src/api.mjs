@@ -408,10 +408,50 @@ function escapeHTML(text) {
   return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 }
 
+// uploadImage puts one image where a turn can reference it, the way the web
+// app attaches a picture: ask for a presigned COS URL, PUT the bytes there,
+// then confirm the upload. It returns the reference the turn carries in
+// `input_payload.references` — {type:"image", title, content:<url>,
+// metadata:{file_id}} — the shape the web app builds for a screenshot.
+export const IMAGE_LIMIT = 20 * 1024 * 1024
+export async function uploadImage(creds, { bytes, mime, name, room = null, signal }) {
+  const size = bytes?.byteLength ?? 0
+  if (!size) throw new TabbitError("the image is empty")
+  if (size > IMAGE_LIMIT) throw new TabbitError(`the image is ${Math.round(size / 1048576)} MB; Tabbit takes up to 20 MB`)
+  const json = { "content-type": "application/json" }
+  const res = await call(
+    creds,
+    "/proxy/v0/cos/presigned-upload-url",
+    {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ file_category: "image", original_filename: name, content_type: mime, file_size: size, need_download_url: true, download_expires_in: 1_728_000 }),
+    },
+    signal,
+  )
+  const slot = await res.json()
+  if (!clean(slot?.url) || !clean(slot?.file_id)) throw new TabbitError("Tabbit gave no upload slot for the image")
+  // The presigned URL is the storage bucket's, not Tabbit's: no cookie.
+  const put = await fetch(slot.url, {
+    method: "PUT",
+    headers: { "content-type": mime },
+    body: bytes,
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
+  })
+  if (!put.ok) throw new TabbitError(`uploading the image failed (HTTP ${put.status})`, { status: put.status })
+  await call(
+    creds,
+    "/api/v0/cos/complete-upload",
+    { method: "POST", headers: json, body: JSON.stringify({ file_id: slot.file_id, ...(room ? { session_id: room } : {}) }) },
+    signal,
+  )
+  return { type: "image", title: name, content: clean(slot.download_url) || "", metadata: { file_id: slot.file_id } }
+}
+
 // runTurn queues one turn. `selected_model` takes the catalog's
 // display_name, and `content` is the whole prompt: Tabbit keeps the room's
 // own history, so a follow-up may carry only the new message.
-export async function runTurn(creds, room, { content, model, parentMessageId = null, signal }) {
+export async function runTurn(creds, room, { content, model, parentMessageId = null, references = [], signal }) {
   const rid = `tab_${crypto.randomUUID()}`
   const body = {
     client_run_id: rid,
@@ -425,7 +465,7 @@ export async function runTurn(creds, room, { content, model, parentMessageId = n
       content,
       parent_message_id: parentMessageId,
       selected_model: [model],
-      references: [],
+      references,
       metadatas: { html_content: `<p>${escapeHTML(content)}</p>` },
       page_info_list: [],
       is_mobile: false,

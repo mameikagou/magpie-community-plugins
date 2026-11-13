@@ -252,6 +252,17 @@ handles it in two ways:
   room run". Each part costs one short turn, roughly 10 seconds. Follow-ups in
   the same session only send the new messages, so the parts are sent once per
   room.
+- **Images.** An image part of a message (`image_url` with a `data:` or web
+  URL, `input_image`, or the AI SDK's `image`) is uploaded the way the web app
+  uploads a picture: a presigned upload, a `PUT` to the bucket, and
+  `complete-upload`. It is sent as an `image` reference of the turn whose text
+  mentions it. In the text it becomes a marker, `[image img-<hash>]`, where it
+  sat. The hash comes from the image itself, so a follow-up still matches the
+  transcript the room was sent and the picture is uploaded only once per account
+  (the upload is reused for 19 days). A new room that gets a long transcript
+  attaches only the latest 8 images (`TABBIT_IMAGES`, 0..20; 0 sends none). An
+  image that can't be read or uploaded is left out with a log line, and the
+  turn goes ahead without it.
 
 ## Working on this package
 

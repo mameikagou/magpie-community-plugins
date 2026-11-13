@@ -11,7 +11,10 @@
 export const OPEN = "<tool_call>"
 export const CLOSE = "</tool_call>"
 
-export function partText(content) {
+// partText flattens a message's content to text. An image part becomes
+// `onImage(part)`'s marker when that names one (the plugin uploads the picture
+// and the marker says where it sat — see images.mjs), else "[image]".
+export function partText(content, onImage = null) {
   if (content == null) return ""
   if (typeof content === "string") return content
   if (!Array.isArray(content)) return typeof content === "object" ? JSON.stringify(content) : String(content)
@@ -19,7 +22,7 @@ export function partText(content) {
   for (const part of content) {
     if (typeof part === "string") parts.push(part)
     else if (part?.type === "text" || part?.type === "input_text" || typeof part?.text === "string") parts.push(part.text ?? "")
-    else if (part?.type === "image_url" || part?.type === "input_image" || part?.type === "image") parts.push("[image]")
+    else if (part?.type === "image_url" || part?.type === "input_image" || part?.type === "image") parts.push((onImage && onImage(part)) || "[image]")
     else if (part?.type === "file" || part?.type === "input_file") parts.push("[file]")
   }
   return parts.join("\n")

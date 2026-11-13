@@ -32,11 +32,13 @@ import {
   join,
   stop,
   archiveRoom,
+  uploadImage,
   TabbitError,
 } from "./src/api.mjs"
 import { BOOTSTRAP, NPM, CHAT_BASE, rowsOf, allowedModels } from "./src/models.mjs"
 import { turnDeltas, readTurn } from "./src/sse.mjs"
 import { splitTurn } from "./src/chunk.mjs"
+import { collector, marked, bytesOf, nameOf, imageLimitOf, pruneRefs } from "./src/images.mjs"
 import {
   ROOM_TTL,
   ROOM_CHARS,
@@ -87,6 +89,9 @@ function concurrencyOf(env) {
 // of the plugin host keeps a session in its rooms.
 const rooms = new Map()
 const locks = new Map()
+// Uploaded images by key (src/images.mjs): the reference a turn sends, reused
+// while its download URL lasts, so a picture is uploaded once per account.
+const refCache = new Map()
 const roomsPath = roomsFile()
 let roomsLoaded = false
 function loadOnce() {
@@ -156,16 +161,19 @@ function stripModel(value) {
 }
 
 // contentOf flattens one message's content: a string, or the array of parts
-// the OpenAI SDK sends. Only text parts are taken; an image part is named so
-// the turn still says something about it.
-function contentOf(content) {
-  return partText(content)
+// the OpenAI SDK sends. Text parts are taken as they are; an image part is a
+// marker `[image img-<key>]` when `onImage` records it (the turn uploads it
+// and sends it along — src/images.mjs), else "[image]".
+function contentOf(content, onImage = null) {
+  return partText(content, onImage)
 }
 
 // historyOf is the conversation a room would remember, in order: system
 // prompts, user turns, assistant replies (including tool_calls), and tool
 // execution results.
-function historyOf(messages) {
+function historyOf(messages, images = null) {
+  const onImage = images ? collector(images) : null
+  const contentOf = (content) => partText(content, onImage)
   const out = []
   const callNames = new Map()
   for (const message of Array.isArray(messages) ? messages : []) {
@@ -282,14 +290,15 @@ function planTurn(entry, messages, now = Date.now(), body = null) {
     body = now
     now = Date.now()
   }
-  const history = historyOf(messages)
+  const images = new Map()
+  const history = historyOf(messages, images)
   const specs = toolsOf(body)
   const ch = choiceOf(body, specs.map((t) => t.name))
   const useTools = specs.length > 0 && !ch.off
   const toolsKey = toolsKeyOf(body)
   const allowedNames = useTools ? new Set(specs.map((s) => s.name)) : null
   const tools = useTools ? toolHashes(specs) : null
-  const base = { history, toolsKey, useTools, allowedNames, tools }
+  const base = { history, toolsKey, useTools, allowedNames, tools, images }
 
   const lane = laneFrom(entry)
   const live = lane && !lane.broken && now - (lane.at ?? 0) < ROOM_TTL ? lane : null
@@ -422,6 +431,49 @@ function freeOnly() {
   } catch {
     return false
   }
+}
+
+// ---- images ---------------------------------------------------------------
+
+// imageRefs uploads the images `content` marks — the latest `limit` of them —
+// and returns, per part of the turn, the references that part carries (an
+// image goes with the part its marker is in). An image that can't be read or
+// uploaded is left out: its marker stays as text, and the turn still goes.
+async function imageRefs(creds, parts, images, room, signal, limit = imageLimitOf()) {
+  const out = parts.map(() => [])
+  if (!images?.size || limit <= 0) return out
+  const all = marked(parts.join("\n")).filter((k) => images.has(k))
+  const keep = new Set(all.slice(-limit))
+  pruneRefs(refCache)
+  for (const [i, part] of parts.entries()) {
+    for (const key of marked(part)) {
+      if (!keep.has(key)) continue
+      keep.delete(key)
+      const cacheKey = `${creds.uid || "?"}\u0000${key}`
+      let ref = refCache.get(cacheKey)?.ref
+      if (!ref) {
+        try {
+          const { bytes, mime } = await bytesOf(images.get(key), { signal })
+          ref = await uploadImage(creds, { bytes, mime, name: nameOf(key, mime), room, signal })
+          refCache.set(cacheKey, { ref, at: Date.now() })
+        } catch (error) {
+          if (signal?.aborted) throw error
+          console.error(`tabbit: image ${key} not sent: ${error?.message ?? error}`)
+          continue
+        }
+      }
+      out[i].push(ref)
+    }
+  }
+  return out
+}
+
+// withImages puts a line in front of a part that carries images, naming them
+// in the order they are attached, so the model ties each marker to its image.
+function withImages(part, refs) {
+  if (!refs.length) return part
+  const names = refs.map((r) => String(r.title).replace(/\.[a-z]+$/, "")).join(", ")
+  return `[Attached image${refs.length > 1 ? "s" : ""}, in order: ${names}. A marker [image <name>] in the text below is the attached image of that name.]\n${part}`
 }
 
 // ---- the wire between magpie and Tabbit ---------------------------------
@@ -637,6 +689,7 @@ function createPlugin() {
       let counted = null
       const start = async (roomId, parentMessageId) => {
         const parts = splitTurn(plan.content)
+        const refs = await imageRefs(creds, parts, plan.images, roomId, request.signal)
         let parent = parentMessageId
         lastParent = parent
         // Each part costs its header and the room's "ACK" on top of the text
@@ -647,7 +700,7 @@ function createPlugin() {
         }
         for (const [i, part] of parts.slice(0, -1).entries()) {
           try {
-            await runTurn(creds, roomId, { content: part, model, parentMessageId: parent, signal: request.signal })
+            await runTurn(creds, roomId, { content: withImages(part, refs[i]), references: refs[i], model, parentMessageId: parent, signal: request.signal })
           } catch (error) {
             throw Object.assign(error, { partsSent: i })
           }
@@ -664,7 +717,8 @@ function createPlugin() {
           }
         }
         try {
-          await runTurn(creds, roomId, { content: parts[parts.length - 1], model, parentMessageId: parent, signal: request.signal })
+          const n = parts.length - 1
+          await runTurn(creds, roomId, { content: withImages(parts[n], refs[n]), references: refs[n], model, parentMessageId: parent, signal: request.signal })
         } catch (error) {
           throw Object.assign(error, { partsSent: parts.length - 1 })
         }
