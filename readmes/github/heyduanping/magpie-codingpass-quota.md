@@ -1,38 +1,35 @@
-# CodingPass Usage for Magpie
+# CodingPass for Magpie
 
-在 Magpie 的「观测 → 用量 → 概览」查看 CodingPass 个人订阅的 5 小时、每周和每月额度。卡片显示美元额度、百分比和重置时间，使用与 Devin、Codex 相同的原生走势。Magpie 从首次成功读取开始积累历史。
+在 Magpie 中登录 CodingPass 账号，调用各账号套餐可用的模型，并在「观测 → 用量 → 概览」查看各自的 5 小时、每周和每月额度走势。Magpie 从首次成功读取开始积累历史。
 
-这是非官方插件。已在 Windows 上使用 Magpie 0.1.4113 和 CodingPass Plus 验证。插件只查询账号额度，提供零个模型。
+这是非官方插件。`v0.2.0` 已在 Windows 上用 Magpie `0.1.4113` 和 CodingPass Plus 验证额度查询及模型调用。多账号验证使用了两个模拟账号。
 
 ## 安装
 
-从 GitHub 安装 `v0.1.0`：
+从 GitHub 安装 `v0.2.0` 后登录：
 
 ```sh
-magpie plugin add 'github:heyduanping/magpie-codingpass-quota#v0.1.0'
+magpie plugin add 'github:heyduanping/magpie-codingpass-quota#v0.2.0'
 magpie plugin login codingpass-quota
 ```
 
-如果已下载或克隆仓库，可以在仓库根目录运行：
+从本地目录试用时，可在仓库根目录运行 `magpie plugin add .`。也可以在 Magpie 的「插件」页面安装，再到「供应商 → CodingPass」登录。每次登录使用同一个 CodingPass 账号里的两项凭据。
 
-```sh
-magpie plugin add .
-magpie plugin login codingpass-quota
-```
+1. 在 CodingPass 控制台获取这个账号的 `cp-live-…` API Key。
+2. 保持同一账号登录，打开用量页。在浏览器开发者工具的「应用 → Cookie」中，复制 `https://codingpass.ai` 下的 `cp_session` 值。 [CodingPass 用量页](https://codingpass.ai/zh/app/usage)
+3. 将两项凭据填入 Magpie 的隐藏输入框。账号可用的模型会出现在选择器里，额度会出现在「观测 → 用量 → 概览」。添加另一个获授权使用的账号时，按同样方式登录。
 
-也可以在 Magpie 的「插件」页面添加本地目录，再到「供应商 → CodingPass Usage」登录。
+插件会分别验证 API Key 和 Cookie。CodingPass 的模型列表接口没有返回可与额度接口比对的账号或订阅标识，填写时要确认两项来自同一个账号。订阅按 CodingPass 返回的标识区分，同一订阅更换 Key 或 Cookie 会更新同一条登录记录。同一订阅的多个 Key 共用套餐额度。 [CodingPass API 文档](https://codingpass.ai/zh/docs) · [额度规则](https://codingpass.ai/zh/usage-limits)
 
-1. 在浏览器登录自己的 CodingPass 账号，打开[用量页](https://codingpass.ai/zh/app/usage)。
-2. 在浏览器开发者工具的「应用 → Cookie」中，找到 `https://codingpass.ai` 下的 `cp_session`，复制它的值。
-3. 把值填到 Magpie 隐藏输入的登录提示中。刷新「观测 → 用量 → 概览」，保持「走势」开启。
+## 选用指定账号
 
-如果之前手动添加过余额查询卡，先确认新卡片有数据，再停用旧的余额查询项。已有的 CodingPass 模型供应商继续用于推理。
+在 Magpie 的「路由组」里把模型成员绑定到指定账号。API 客户端也可以用请求头 `X-Magpie-Account` 固定账号。单账号路由组或固定请求头时，指定账号不可用就会收到错误。没有指定账号的请求按 Magpie 的路由规则处理。CodingPass 条款禁止用多个账号规避额度。 [Magpie 账号路由](https://github.com/yetone/magpie/blob/v0.1.4113/docs/subsystems/gateway-routing.md#L1617-L1642) · [CodingPass 服务条款](https://codingpass.ai/zh/terms)
 
-## 更新登录状态
+## 更新登录和保留旧额度历史
 
-登录失效后，重新登录 CodingPass 网页，然后再次运行 `magpie plugin login codingpass-quota` 更新 Cookie。同一账号更新 Cookie 会沿用已有历史。插件按一个个人账号记录额度，换成另一账号会接着写入同一份历史。
+Cookie 过期后，重新登录 CodingPass 网页，再用该订阅的 API Key 和新 Cookie 登录插件。只要 API Key 仍然有效，过期的 Cookie 不影响模型调用。安装旧版 `0.1.0` 时留下的 Cookie 登录仍会显示原额度和历史。添加完整登录后会出现新的账号卡，完整登录的趋势从自己的首个读数开始记录。
 
-`cp_session` 是网页登录凭据。Magpie 把它保存在本机的 `plugin-auth.json`，也可能保留备份。请仅在 Magpie 的登录提示中输入它，分享日志或配置前检查是否含有凭据。插件只把 Cookie 发送到 `https://codingpass.ai/api/app/usage`，并拒绝跟随重定向。该地址是网页控制台接口，CodingPass 更新网站后可能需要更新插件。
+API Key 只用于模型目录和推理。Cookie 只用于额度查询，发送到 CodingPass 的网页控制台接口 `https://codingpass.ai/api/app/usage`。这两项凭据均保存在 Magpie 本机 `plugin-auth.json`，也可能留在它的备份里。网页接口可能随 CodingPass 网站更新而变化。
 
 ## 检查额度和历史
 
