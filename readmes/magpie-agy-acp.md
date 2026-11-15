@@ -109,6 +109,8 @@ bun x tsc --noEmit
 HOME=$(mktemp -d) bun test
 ```
 
+Releases are built by `.github/workflows/release.yml`. The workflow attempts npm publishing with OIDC Trusted Publishing (or `NPM_TOKEN` when configured); any publish failure fails the job. Set the repository Actions variable `SKIP_NPM_PUBLISH=true` to publish only the GitHub release.
+
 ## Credits & License
 
 Forked and rewritten in strict TypeScript from [`@magpie-community/opencode-agy-cli-auth`](https://github.com/magpie-community/plugins/tree/main/packages/agy-cli) (`DylanLIiii`, `gitxm`, `yce`). See [NOTICE.md](./NOTICE.md) and [LICENSE](./LICENSE) (MIT).
