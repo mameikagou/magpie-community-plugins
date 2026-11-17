@@ -71,7 +71,7 @@ magpie plugin add ./magpie-plugin-muse2api
    $env:MUSE2API_KEY = "m2a_…"
    ```
 
-优先级：插件选项 > `magpie.option()` > 环境变量。
+优先级：插件选项 > `input.magpie.option()` > 环境变量。
 
 ## 工具怎么用
 
@@ -137,7 +137,7 @@ magpie plugin add ./magpie-plugin-muse2api
 ## 开发
 
 ```bash
-bun test              # 49 条单元测试，含 mock muse2api
+bun test              # 53 条单元测试，含 mock muse2api
 bun run test/smoke.mjs  # 端到端冒烟：插件入口 → 真 HTTP → mock muse2api，四条工具链跑通
 ```
 
