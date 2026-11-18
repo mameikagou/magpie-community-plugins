@@ -28,7 +28,7 @@ If you use more than one ZGAP account, choose one at the top. These views cover 
 usage across devices. **Connection guide** stays available, and signing out clears the account’s data.
 
 If you already installed the plugin, use **Plugins → Installed → ZGAP → Update** to get the current
-dashboard.
+version.
 
 ## Connect from a terminal
 
@@ -46,6 +46,9 @@ on the same computer, and signing in here again updates the same session.
 - **Models**: read from ZGAP's `/v1/models` once you are signed in. Display names are separate from
   request IDs. Context and output limits, input/output modalities, reasoning, tools and temperature
   support come from the catalog; unknown values remain unspecified.
+- **Speed**: GPT models also carry the speed tiers ZGAP's accounts serve them at (Fast, and Ultrafast where
+  available). magpie then offers them in an agent's model picker, a group and the model's own speed setting.
+  An agent on Claude's Messages API, such as Claude Code, can only ask for Fast, so Ultrafast runs as Fast there.
 - **Requests**: ZGAP serves every model on Chat Completions, Messages and Responses, so magpie relays each
   agent's request in the protocol the agent sent it in. The plugin adds the current access token.
 - **Tokens**: the access token lasts 24 hours. magpie renews it before it runs out with the refresh token,
