@@ -96,7 +96,7 @@ macOS 的精简包是在官方 zip 里删掉 `Camoufox.app/Contents/Resources/fo
 2. 找到 **Gruu6y** 发布的 **Clean Login**，点 **Install**。列表没同步出来就点 **Retry**——magpie 缓存的是 GitHub 告诉它的结果。
 3. 从侧栏打开 **Clean Login**，你会看到上面那张图里的页面。
 
-每个版本都在本仓库打了 tag（`v0.1.x`），[tag 列表](https://github.com/Gruu6y/magpie-clean-login/tags)就是版本历史。
+每个版本都在本仓库打了 tag（当前 `v0.2.x`，更早是 `v0.1.x`），[tag 列表](https://github.com/Gruu6y/magpie-clean-login/tags)就是版本历史。
 
 <a id="quick-start"></a>
 
@@ -235,9 +235,9 @@ bun bin/clean-login.mjs assets      # 只看已登记的资产（邮箱、手机
 bun bin/clean-login.mjs proxies add 家宽01 http 127.0.0.1 7102   # 存一条出口
 bun bin/clean-login.mjs accounts import plan                     # 预览 magpie 已有的账号
 bun bin/clean-login.mjs accounts import run --only <provider>#<recordId>
-bun bin/clean-login.mjs accounts exit <provider>#<recordId> --mode custom --proxy <proxyId>
-bun bin/clean-login.mjs accounts note <provider>#<recordId> 备用号
-bun bin/clean-login.mjs accounts delete <provider>#<recordId>
+bun bin/clean-login.mjs accounts exit <provider> <key> --mode custom --proxy <proxyId>
+bun bin/clean-login.mjs accounts note <provider> <key> 备用号
+bun bin/clean-login.mjs accounts delete <provider> <key>
 bun bin/clean-login.mjs assets add google-mail a@b.com --note 主邮箱   # 登记一条资产
 bun bin/clean-login.mjs assets get <id>                                 # 按 id 取一条
 bun bin/clean-login.mjs assets update <id> --note 备用                  # 改类型/账号/备注
