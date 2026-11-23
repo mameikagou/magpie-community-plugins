@@ -1,4 +1,4 @@
-# magpie-amazon-quick
+# magpie-amazon-quick-plus
 
 [中文](#中文说明) | [English](#english)
 
@@ -31,10 +31,10 @@
 
 ## 安装方式（Magpie）
 
-在 Magpie 的 **Plugins** 页面直接填入 GitHub 仓库地址安装，或在 `Discover → Unofficial` 中搜索 `magpie-amazon-quick`：
+在 Magpie 的 **Plugins** 页面直接填入 GitHub 仓库地址安装，或在 `Discover → Unofficial` 中搜索 `magpie-amazon-quick-plus`：
 
 ```text
-https://github.com/3056810551/magpie-amazon-quick
+https://github.com/yubanmeiqin9048/magpie-amazon-quick-plus
 ```
 
 ## 登录方式
@@ -122,10 +122,10 @@ Works with **OpenCode 1.x**, **OpenCode 2.x**, and **Magpie** with zero external
 
 ## Installation (Magpie)
 
-Install directly from GitHub in Magpie **Plugins**, or find `magpie-amazon-quick` under **Discover → Unofficial**:
+Install directly from GitHub in Magpie **Plugins**, or find `magpie-amazon-quick-plus` under **Discover → Unofficial**:
 
 ```text
-https://github.com/3056810551/magpie-amazon-quick
+https://github.com/yubanmeiqin9048/magpie-amazon-quick-plus
 ```
 
 ## Sign-In Methods
