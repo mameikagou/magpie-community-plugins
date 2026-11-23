@@ -59,6 +59,7 @@ Key 用 `npx magpie-aws-quick-bridge status` 看。
 - **`serve` 得一直开着**，关了 agent 就连不上。macOS 上可以先 `npm install -g magpie-aws-quick-bridge`，再 `magpie-aws-quick-bridge service install` 让它在后台常驻。
 - CC Switch 里**不用开「本地路由」**，每个应用拿到的已经是它自己的接口格式。
 - token 快到期会自己续；真过期了请求会报 401，重新 `login` 一次就行，不用重启 `serve`。
+- 登录时浏览器提示 **`Your session has expired`**：多半是浏览器里留着一份过期的 AWS 登录状态。换个无痕窗口打开登录地址，或者清掉 `signin.aws` 的 Cookie 再登（在 Magpie 里登录也一样）。这一条我自己没碰到过，是别人遇到后这样解决的。
 - 服务只听 `127.0.0.1`，每个请求都要带 Key。别把它放到公网上。
 - Claude Code 启动时会提示不认识 `smart` 这个模型名，不影响使用。
 - Gemini CLI 用的是另一种接口，暂时不支持。
