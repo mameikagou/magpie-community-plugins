@@ -55,7 +55,7 @@ What the plugin does:
    body likewise base64-wrapped inner JSON). A `ping` goes out every 25s.
 4. **Protocol translation**: OpenAI `messages` are rendered into Quick's
    `text` (below) — except the system prompt, which rides the dedicated
-   `user_message.system_prompt` field (verified live); downlink
+   `user_message.custom_prompt` field (verified live); downlink
    `text_delta`/`thinking_delta`/`turn_usage`/`message_complete` become
    OpenAI `content`/`reasoning_content`/`usage`. A user turn ends at
    `message_complete` with `continuation_expected !== true` — the same
@@ -91,9 +91,16 @@ continuations through three tiers, most precise first:
 Tier order matters: verified content matches always win; the session key
 is only used when both content tiers fail.
 - **Scope isolation** — the chain is namespaced by
-  `H(account, agent_mode, thinking_effort, system prompt, tool names)`:
-  switching accounts, models, effort, system prompt, or the toolset
-  starts a fresh thread rather than resuming a stale one.
+  `H(account, agent_mode, system prompt)`: switching accounts, models or
+  system prompt starts a fresh thread rather than resuming a stale one.
+  Thinking effort is a per-turn field and doesn't split threads; tools are
+  tracked per thread, so a tool added mid-session (Claude Code's ToolSearch,
+  skills) keeps the thread and only the new tool's spec is sent.
+- **Failure-safe** — a reused turn that errors or is cancelled (499, content
+  filter, idle timeout) puts its thread back, so the next request still
+  continues it. The session-key fallback only resumes when the new tool
+  results answer calls that thread made, so parallel subagents sharing one
+  session id never splice into each other's threads.
 - **Edit & branch detection** — any change to earlier messages alters the
   hashes, so edited or branched history can never silently continue a
   thread that doesn't match; only append-only tails qualify. Cached
@@ -239,8 +246,9 @@ A few plugin options tune request handling (`magpie plugin options aws-quick '{�
   workspace — the same place the Quick app puts them. Remote URLs and
   non-image files (`file`/`input_file` parts) are still unsupported; a
   failed upload falls back to a note telling the model the image is
-  missing. Cloud upload needs a direct session (OAuth / Credential Manager
-  sign-in); the local-outpost fallback stays inline-only.
+  missing. Cloud upload works on direct sessions (OAuth / Credential Manager
+  sign-in) and on the local-outpost fallback: outpost sessions carry the same
+  `id_token` / `ws_host`, which is all the upload flow needs (verified live).
 - **Sampling params**: `temperature` etc. don't exist in the protocol and are
   ignored server-side (`capabilities.temperature:false`).
 - **Sessions are account-bound**: the thread-reuse scope includes an account
@@ -255,11 +263,13 @@ A few plugin options tune request handling (`magpie plugin options aws-quick '{�
   any server feature that needs a connected device (local files/apps) won't
   apply.
 - **Message size**: the whole `user_message` frame is hard-capped at 64 KB
-  server-side (`text` + `system_prompt` share it). Oversized system prompts /
+  server-side (text, instructions and attachments share it). Oversized system prompts /
   tool schemas / history are compacted automatically (schema de-annotation,
   tool-spec lite then names-only fallback, oldest-first history trimming,
-  capped tool results); truncation is surfaced as a `> [quick] …truncated`
-  note.
+  capped tool results). Ordinary chat keeps full system instructions when they fit alongside the
+  encoded turn. Claude Code Auto permission reviews require the complete policy
+  and transcript in one frame. An oversized review returns HTTP 413 before
+  contacting Quick. In Claude Code, Manual mode lets you approve tool requests.
 
 ## Security & credentials
 
