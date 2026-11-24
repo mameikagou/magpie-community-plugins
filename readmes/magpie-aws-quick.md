@@ -13,6 +13,10 @@ Gemini CLI, OpenCode, etc. — can use the models behind Quick
 > session-affinity headers are used to keep reusing the same Quick thread.
 > Other clients work too, but get less testing.
 
+> **Prefer the native Quick desktop app?** [aws-quick-manager](https://github.com/httpdone/aws-quick-manager)
+> switches accounts in the official Quick app in one click and copies chat
+> sessions between accounts through Quick's cloud API, with no reverse proxy.
+
 > ⚠️ For personal use with your own account only. This drives the desktop
 > client's internal bidirectional WebSocket protocol (not a public API) and
 > very likely violates AWS terms of service; your account may be limited or
@@ -217,6 +221,14 @@ A few plugin options tune request handling (`magpie plugin options aws-quick '{�
 - `stableDeviceId` (default `true`): direct sessions send a stable
   per-account device id as `outpostId` (see Device ids above); `false` sends
   an empty value.
+
+## FAQ
+
+**After signing in to a second account, the first one stopped working.**
+You most likely signed out of the first account in the same browser before
+signing in to the second. Signing out revokes that account's credentials, so
+the plugin can no longer refresh it. Sign in each account in a different
+browser or in a private/incognito window, without signing out of the others.
 
 ## Known limitations
 
