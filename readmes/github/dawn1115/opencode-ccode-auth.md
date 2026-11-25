@@ -7,9 +7,9 @@
 - **登录什么**：CCode 账号的 API key（在 [app.ccode.si/keys](https://app.ccode.si/keys) 创建，前缀 `sk-lg-`）。需要 Starter 或 Pro 套餐才能从其他工具调用；Free 套餐只能在其官方 App 里用，外部调用会返回 `403 plan_required`。
 - **怎么登录**：一行命令，粘贴 key；或在 magpie 应用里点供应商那一行登录。
 - **登录信息存哪里**：magpie 保存在 `~/.config/magpie/plugin-auth.json`（权限 600，格式兼容 OpenCode 的 `auth.json`，两者可互相迁移）。OpenCode 里则存在它自己的 `auth.json`。
-- **有哪些模型**：登录后从 `GET https://api.ccode.si/v1/models` 动态拉取你的 key 可用的全部模型（最多 26 个，含 Claude Opus/Sonnet/Fable/Haiku、GPT-6.x/5.x、GLM 5.3、Kimi K3.1、Qwen 4/3.8、DeepSeek V4.1）。`-free` 结尾的 App 专用模型自动隐藏。
+CCode API 的两种认证头（`Authorization: Bearer` 与 `x-api-key`）都会被设置。插件发送 `x-ccode-client: ccode/1.12.1`——这是 CCode 官方 App/CLI 用来标识自己的请求头，服务端据此判定为官方客户端，从而让 **Free 账号的免费额度在 magpie 里也能用**（额度会被正常扣减，见下方额度查询）。
 
-供应商 id 是 `ccode`，模型写作 `ccode/<model>`。请求被发往 `https://api.ccode.si/v1`（chat completions），两种认证头（`Authorization: Bearer`、`x-api-key`）都会带上，magpie 会把任意 agent 的请求转换成该格式。
+- **模型清单**：登录后从 `GET /v1/models` 动态拉取；Free 账号该接口返回空，插件会保留内置的 32 个模型（26 个付费模型 + 6 个 `-free` 免费模型）。实测 Free 账号可调用 `glm-5.3`、`qwen-4-max` 以及 6 个 `-free` 模型。
 
 ## 安装（magpie）
 
@@ -59,7 +59,7 @@ opencode auth login   # 选 ccode，粘贴 API key
 ccode · free · API key …IHyn  subscription  Free 5-hour window 0%  Free Weekly window 0%  Free Monthly window 0%  Top-up Weekly window 0%  $5.00 left
 ```
 
-> **注意**：Free 套餐的额度只能在 CCode 官方 App 里调用模型。从 magpie / 其他工具调用会返回 `403 plan_required`；要实际调用需升级 Starter（$1/月，$5 额度）或 Pro（$10/月，$70 额度），用付费账号的 key 重新登录。插件依然能正确显示免费账号的所有额度。
+> Free 账号现在可以实际调用模型（已实测 `magpie provider test ccode` 返回 200，额度正常扣减）。如果某个付费模型返回 403，说明该模型不在当前套餐内，换 `-free` 模型或升级套餐。
 
 ## 测试
 

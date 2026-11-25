@@ -279,9 +279,12 @@ browser or in a private/incognito window, without signing out of the others.
   tool schemas / history are compacted automatically (schema de-annotation,
   tool-spec lite then names-only fallback, oldest-first history trimming,
   capped tool results). Ordinary chat keeps full system instructions when they fit alongside the
-  encoded turn. Claude Code Auto permission reviews require the complete policy
-  and transcript in one frame. An oversized review returns HTTP 413 before
-  contacting Quick. In Claude Code, Manual mode lets you approve tool requests.
+  encoded turn. Claude Code Auto permission reviews keep the complete policy:
+  a policy too large for one frame is primed verbatim into a dedicated Quick
+  thread (cached per policy, rotated periodically), so the classifier still
+  sees every rule; only a policy beyond ~400 KB or an un-fittable request
+  returns HTTP 413. The first review after a policy change pays a few seconds
+  of priming; later ones are as fast as a normal turn.
 
 ## Security & credentials
 
