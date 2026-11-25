@@ -232,6 +232,16 @@ browser or in a private/incognito window, without signing out of the others.
 
 ## Known limitations
 
+- **Usage limits become 429s, with fast failover.** Quick enforces a rolling
+  session bucket (minutes of agent time per window) plus a monthly bucket.
+  When an account runs out, the runtime sometimes answers with a NORMAL
+  assistant message whose whole text is "You've reached your usage
+  limit…" instead of an error — the plugin detects that pseudo-200 (exact
+  match only, so replies quoting the sentence pass through) and turns it
+  into a `rate_limit_error`/429. It then queries the account's
+  `profile/usage` for the session bucket's `resume_in_minutes` and fails
+  fast with 429 until the window resumes, so magpie moves to another
+  account immediately instead of burning one upstream turn per request.
 - **Tool calls are a text-convention simulation**: Quick's agent owns a
   server-side toolchain (browser, local files, MCP, …); its `tool_start`/
   `tool_result` events are executed by Quick itself while clients only observe,

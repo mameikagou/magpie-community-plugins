@@ -10,6 +10,10 @@ Sync Magpie models, connectors, skills, instructions, and selected subagents to 
 
 [Quick start](#quick-start)
 
+<img src="./assets/ducoro-plugin.png" alt="Ducoro plugin Sync settings showing the switches for the gateway connection, Bot models, connectors, skills, and instructions" width="720">
+
+*Ducoro’s Sync settings with example data.*
+
 ## Overview
 
 Use Magpie's default model in Ducoro or configure individual Bots. Review the changes before saving and check which settings Ducoro wrote, read back, and loaded into a session.

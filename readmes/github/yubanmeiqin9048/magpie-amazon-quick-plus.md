@@ -88,7 +88,7 @@ https://github.com/yubanmeiqin9048/magpie-amazon-quick-plus
 
 - `QUICKWORK_DIR` / `AWS_QUICK_DIR`：覆盖默认的 `~/.quickwork` 配置目录路径。
 - `MAGPIE_QUICK_STRIP_REASONING_CONTENT`：设为 `1` / `true` / `yes` / `on` 时不向调用方下发上游 `reasoning_content`（等价于 `executeSncsChat` 的 `stripReasoning: true`，显式传参优先）。
-- `MAGPIE_QUICK_AGENT_MODE`：Draft Agent 通道开关（默认 `carrier`）。设为 `off` / `none` / `0` / `false` 时回到仅内联 `<instructions>` 的方案。
+- `MAGPIE_QUICK_AGENT_MODE`：Draft Agent 通道开关（默认 `off`，回到仅内联 `<instructions>` 的方案）。设为 `carrier` 时启用草稿 agent 指令层。
 - `MAGPIE_QUICK_AGENT_CACHE_FILE`：Carrier 草稿 agent 缓存文件路径（默认 `<quickworkDir>/carrier-agents.json`，即通常是 `~/.quickwork/carrier-agents.json`；亦受 `QUICKWORK_DIR` / `AWS_QUICK_DIR` 影响）。只记录创建成功的 `agentId`，失败不落盘；读写异常自动退回纯内存。
 - `MAGPIE_QUICK_WEB_SEARCH`：未显式传 `web_search_enabled` 时的默认值（默认开启，与桌面端一致）。设为 `false` / `0` / `off` / `no` 时默认关闭云端联网，避免抢答调用方自己的工具链；请求体显式传参始终优先。
 
@@ -186,7 +186,7 @@ When monthly overage (`overage_monthly`) is enabled on an account, it is display
 
 - `QUICKWORK_DIR` / `AWS_QUICK_DIR`: Override the default `~/.quickwork` profile directory path.
 - `MAGPIE_QUICK_STRIP_REASONING_CONTENT`: Set to `1` / `true` / `yes` / `on` to withhold upstream `reasoning_content` from callers (equivalent to `stripReasoning: true` in `executeSncsChat`; explicit option takes precedence).
-- `MAGPIE_QUICK_AGENT_MODE`: Draft Agent channel switch (default `carrier`). Set to `off` / `none` / `0` / `false` to stay on the inline `<instructions>` path only.
+- `MAGPIE_QUICK_AGENT_MODE`: Draft Agent channel switch (default `off`, staying on the inline `<instructions>` path). Set to `carrier` to enable the draft-agent instruction layer.
 - `MAGPIE_QUICK_AGENT_CACHE_FILE`: Path of the carrier draft-agent cache (default `<quickworkDir>/carrier-agents.json`, normally `~/.quickwork/carrier-agents.json`; also honours `QUICKWORK_DIR` / `AWS_QUICK_DIR`). Only successfully created `agentId`s are stored, failures are never written, and any read/write error silently falls back to memory.
 - `MAGPIE_QUICK_WEB_SEARCH`: Default for `web_search_enabled` when a request does not set it (on by default, matching the desktop app). Set to `false` / `0` / `off` / `no` to default off so Quick's cloud search cannot answer ahead of the caller's own tool chain; an explicit request field always wins.
 
