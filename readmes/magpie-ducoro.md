@@ -6,9 +6,9 @@
 
 [**English**](./README.md) | [中文](./README-zh-CN.md)
 
-A Magpie plugin that syncs models, connectors, skills, and instructions to Ducoro Bots.
+A Magpie plugin for setting up Ducoro Bots with models, connectors, skills, and instructions from Magpie.
 
-[![License: MIT](./assets/badges/license.svg)](./LICENSE) [![Version: 0.4.11](./assets/badges/version.svg)](./package.json) [![Language: JavaScript](./assets/badges/language.svg)](./lib/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-2359D1?style=flat&labelColor=382A26)](./LICENSE) [![Version: 0.4.11](https://img.shields.io/badge/Version-0.4.11-A34422?style=flat&labelColor=382A26)](./package.json) [![Language: JavaScript](https://img.shields.io/badge/Language-JavaScript-993D58?style=flat&labelColor=382A26)](./lib/)
 
 [Go to Quick Start](#quick-start)
 
@@ -18,7 +18,7 @@ A Magpie plugin that syncs models, connectors, skills, and instructions to Ducor
 
 ## Overview
 
-Let Bots share Magpie’s default model or choose a model for each Bot. Before syncing, review which settings and resources Ducoro will receive or remove.
+Use Magpie’s default model across Bots or configure each Bot individually. Preview what sync will change, then check which settings Ducoro wrote and which it verified by reading them back.
 
 ## Requirements
 
@@ -38,10 +38,10 @@ To install from an archive, extract the release source and add the extracted fol
 
 ## Quick Start
 
-1. In Magpie’s **Agent** page, connect Ducoro and choose a model. Open **Ducoro** in Magpie’s sidebar.
-2. In **Sync settings**, review the connection slug, enabled resource types, and target Bots. For individual assignments, open **Bot resources**.
-3. Select **Preview changes** to review additions, removals, and first-time gateway connection creation. If you changed any settings, select **Preview and save** and confirm to start syncing.
-4. Open **Sync status** to check writes and readback verification. If you kept the current settings and need to start another sync, select **Retry sync** there. To confirm the configuration in use, start a new Ducoro session with a target Bot and check the synced settings there.
+1. On Magpie’s **Agent** page, connect Ducoro and choose a model. Then open **Ducoro** from the sidebar.
+2. In **Sync settings**, check the connection slug, enabled resource types, and target Bots. Open **Bot resources** to assign resources to individual Bots.
+3. Select **Preview changes** to check additions, removals, and whether sync will create a gateway connection. To apply edited settings, select **Preview and save** and confirm.
+4. In **Sync status**, check the writes and readback results. Select **Retry sync** if you need to run sync again with the saved settings. To confirm that a Bot loads the settings, start a new session with that Bot in Ducoro and check the synced settings there.
 
 > [!NOTE]
 > Plugin installation and the first sync were unverified in the documentation environment. The read-only diagnostics command ran, but the plugin’s live service was unreachable there.
@@ -72,11 +72,13 @@ Management records default to `~/.config/magpie/ducoro-bridge/state.json`. `DUCO
 
 ## Troubleshooting
 
-If the plugin page fails to load, check that Magpie can find `ducoro-cli`, the Ducoro background service is running, and the configured `servicePort` is available. Run this read-only diagnostic from a checkout or an extracted release directory. Add `--lang zh` for Chinese or `--json` for structured output.
+If the plugin page fails to load, check that Magpie can find `ducoro-cli`, the Ducoro background service is running, and the configured `servicePort` is available. Run this read-only diagnostic from a checkout or an extracted release directory.
 
 ```bash
 node diagnostics-cli.mjs --doctor
 ```
+
+If you changed `servicePort`, pass its value with `--port`. Use `--lang zh` for Chinese or `--json` for structured output.
 
 If unreadable management records pause sync, keep the original `state.json` and its journal. Review a valid backup in **Backup and restore**, then preview the impact before resuming.
 

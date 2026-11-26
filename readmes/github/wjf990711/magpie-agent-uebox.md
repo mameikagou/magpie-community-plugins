@@ -38,21 +38,43 @@ it is given and cannot be handed one from outside. Usage is counted as `uebox`.
 
 ## Library support
 
-`uebox.agent.js` declares UEBox's `library` places so magpie's Library can sync:
+`uebox.agent.js` points `agent.library` at a cross-platform staging folder
+inside magpie's config directory (`~/.config/magpie/uebox-library/`), and the
+plugin host (`index.mjs` + `lib/library.mjs`) merges it into UEBox's real data
+folder (`uebox_dir()` on Windows, macOS, and Linux):
 
-- **Instructions** (`$APPDATA/unreal-box/instructions.md`): UEBox reads this file
-  as `<user_instructions>` in its system prompt (capped at 4000 characters by
-  UEBox).
+- **Instructions** (`instructions.md`): merges only the
+  `<!-- magpie:begin … -->` / `<!-- magpie:end -->` block while preserving the
+  user's own text. UEBox injects this file as `<user_instructions>` in its
+  system prompt (capped at 4000 characters by UEBox).
 - **Memory**: works through both the Memory digest written into `instructions.md`
   (when UEBox is ticked under Library → Instructions) and the `magpie-memory` MCP
   server (when ticked for UEBox under Library → MCP servers).
-- **MCP servers** (`$APPDATA/unreal-box/mcp.json`, format `claude`): supports
-  both `stdio` and `http` servers under `mcpServers`. Note that UEBox only accepts
-  server IDs matching `/^[a-zA-Z0-9_-]{1,32}$/`.
-- **Skills** (`$APPDATA/unreal-box/skills`): **set UEBox to Copy mode**
-  (`magpie library skill how copy uebox`, or switch UEBox to Copy in Library →
-  Skills). UEBox's skill scanner uses `Dirent.isDirectory()`, which skips
-  symlinks and Windows directory junctions.
+- **MCP servers** (`mcp.json`, format `claude`): merges managed `stdio` and
+  `http` servers into `mcpServers`, preserves existing user servers as well as
+  per-server fields you set inside UEBox (`trusted`, `allowedTools`,
+  `readOnlyTools`, `disabled`), and removes only magpie-managed entries when
+  unticked. Server names longer than 32 characters (UEBox's limit) are skipped
+  and logged.
+- **Skills** (`skills/`): UEBox's `SkillsService` uses
+  `readdir(..., { withFileTypes: true })` with `entry.isDirectory()`, which
+  skips symlinks and Windows directory junctions. The plugin host dereferences
+  staged skills and copies them as real directories into UEBox's `skills/`
+  folder, leaving user-owned skills untouched, so skills work with magpie's
+  default link mode without manual configuration. If you edit a copied skill
+  inside UEBox, the plugin detects the content change and leaves your edited
+  copy alone on both updates and unticks—future magpie updates will no longer
+  overwrite it; delete that folder in UEBox's `skills/` directory to resume
+  syncing from magpie.
+
+**Cleanup & sync state**: Before uninstalling this plugin, untick UEBox under
+Library → Instructions / MCP servers / Skills so the host removes its managed
+entries cleanly; otherwise remove the `<!-- magpie:begin … -->` block from
+`instructions.md`, managed entries from `mcp.json`, and copied folders from
+`skills/` manually. The host tracks which entries it owns in
+`~/.config/magpie/uebox-library/.uebox-sync-state.json`; if that state file is
+deleted, previously managed entries are treated as user-owned and will not be
+removed automatically.
 
 Hooks, Environment variables, Subagents, Slash commands, and Rules are not
 applicable: magpie currently exposes only `instructions`, `mcp`, and `skills` to
