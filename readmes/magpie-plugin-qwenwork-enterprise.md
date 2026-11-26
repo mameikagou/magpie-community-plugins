@@ -14,19 +14,24 @@ riding along.
 
 | Provider id | Service | Host rule |
 |---|---|---|
-| `qwenwork-ent` | QwenWork Enterprise (旗舰版) | `<instance>.vpc.qwenwork.cn` and its `-openapi` / `-gateway` hosts |
+| `qwenwork-ent` | QwenWork Enterprise (旗舰版) | the enterprise's own one host, e.g. `gehua.vpc.qwenwork.cn` |
 
-## How the hosts are built
+## How the host is built
 
-QwenWork's desktop client moves all three services onto a dedicated domain once
-an instance is configured. This plugin builds the same three hosts from the
-instance prefix, which is asked once at sign-in and kept on the account:
+The enterprise flagship is a **single host**: the sign-in page, the account API
+and the model gateway all live on the domain the enterprise console shows. The
+plugin asks for it once at sign-in and keeps it on the account:
 
-| Purpose | Host |
+| Purpose | Address |
 |---|---|
-| Sign-in page | `https://<instance>.vpc.qwenwork.cn` |
-| Accounts, tokens, usage | `https://<instance>-openapi.vpc.qwenwork.cn` |
-| Models, agent chats | `https://<instance>-gateway.vpc.qwenwork.cn` |
+| Sign-in page | `https://<domain>/device/selectAccounts` |
+| Accounts, tokens, usage | `https://<domain>/api/v1/...` |
+| Models, agent chats | `https://<domain>/algo/...` |
+
+> There are no `<domain>-openapi` / `-gateway` hosts on the flagship — they are
+> NXDOMAIN. Building them the way Qoder CN's VPC does leaves the sign-in page
+> working but the poll pointed at a dead host, so magpie sits at "signing in"
+> forever. 0.1.1 uses the single host.
 
 Enterprise sign-in is a `premiumIam` flow: it sends **no `redirect_uri`**, and the
 OAuth client id comes from the enterprise deployment profile, not the personal
@@ -55,23 +60,26 @@ refuse — the symptom is a failed sign-in with little detail:
 export QWENWORK_ENT_CLIENT_ID='<client id from the enterprise deployment>'
 ```
 
-## Sign in: the instance prefix
+## Sign in: the enterprise domain
 
 ```sh
 magpie plugin login qwenwork-ent
-# enterprise instance prefix (acme -> acme.vpc.qwenwork.cn), or a full host
+# the enterprise domain from its console, e.g.
+# gehua.vpc.qwenwork.cn
+# a bare prefix (gehua) takes the configured VPC suffix
 ```
 
 For unattended installs, skip the prompt:
 
 ```sh
-export QWENWORK_ENT_VPC_INSTANCE=acme
+export QWENWORK_ENT_DOMAIN=gehua.vpc.qwenwork.cn
+# or just the prefix
+export QWENWORK_ENT_VPC_INSTANCE=gehua
 ```
 
-`acme`, `acme.vpc.qwenwork.cn`, `https://acme.vpc.qwenwork.cn`,
-`acme-openapi.vpc.qwenwork.cn` and `https://acme-gateway.vpc.qwenwork.cn/` all
-name the same instance. `http://`, IPs, other domains, paths and ports are
-refused, so an enterprise token is never signed for the wrong host.
+`gehua`, `gehua.vpc.qwenwork.cn`, `https://gehua.vpc.qwenwork.cn` and the same
+with a trailing slash all name the same host. `http://`, IPs, `localhost` /
+`.local` / `.internal`, paths and ports are refused.
 
 ## Enterprise CA / private network
 
@@ -106,8 +114,9 @@ All optional, all prefixed `QWENWORK_ENT_`; every one can also live in
 | Variable | Default | Meaning |
 |---|---|---|
 | `CLIENT_ID` | personal id | **Enterprise OAuth client id** — set it explicitly |
-| `VPC_DOMAIN` | `vpc.qwenwork.cn` | Suffix of the dedicated domain |
-| `VPC_INSTANCE` | empty | Instance prefix; makes sign-in non-interactive |
+| `DOMAIN` | empty | The enterprise domain; makes sign-in non-interactive (recommended) |
+| `VPC_DOMAIN` | `vpc.qwenwork.cn` | Suffix used when only a bare prefix is given |
+| `VPC_INSTANCE` | empty | Prefix alias for `DOMAIN` |
 | `WEB` / `OPENAPI` / `API` | public gateway | Base addresses only; a VPC account uses its own three hosts |
 | `REDIRECT` | empty | Enterprise sign-in sends none |
 | `REFRESH_TARGET` | `c` | Fallback device-token refresh target; an organisation identity renews as `biz` |
@@ -122,8 +131,8 @@ All optional, all prefixed `QWENWORK_ENT_`; every one can also live in
 
 ## Safety
 
-- Only the enterprise VPC sign-in is offered; personal sign-in is not exposed.
-- An account with no instance is refused before any request, instead of falling
+- Only the enterprise-domain sign-in is offered; personal sign-in is not exposed.
+- An account with no recorded domain is refused before any request, instead of falling
   back to the public gateway.
 - Upstream errors are trimmed and token-redacted by the adapter before they
   reach the caller.
