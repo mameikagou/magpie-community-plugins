@@ -80,6 +80,17 @@ npm run upstream # 比对上游 zfr-core 的新 commit
 
 注意：OpenCode / Kilo 的**免费额度**是上游限制。额度用尽会出现 429（`Retry-After` 约 39 分钟），这和插件缓存无关；等额度恢复或使用自己的账号即可。
 
+### 推送（github.com 不可达时）
+
+有些网络能连 `api.github.com`、连不上 `github.com`，`git push` 会超时。`scripts/ghpush.mjs` 走 Git Data API 完成同样的原子提交：
+
+```sh
+GITHUB_TOKEN=... node scripts/ghpush.mjs \
+  ksmord zfr-magpie main . "commit message" README.md src/onesearch.mjs --noop
+```
+
+去掉 `--noop` 才真正提交；`--delete <path>` 删除仓库内文件。文件内容从磁盘读，二进制按 base64 上传，内容没变时直接返回 `changed false` 不产生空提交。
+
 ## 上游同步
 
 `.upstream.json` 钉住 zfr-core 的基线 commit；GitHub Actions 每天检查上游更新并在有变化时建 issue。上游改了协议字段时，优先看 `src/constants.mjs` 与 `src/fingerprint.mjs`。
