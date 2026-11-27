@@ -315,6 +315,7 @@ magpie provider test muse-web          # 发一条真实的小请求，检查整
 - 闲置超过 60 分钟，引擎会关掉浏览器省资源（`MUSE_WEB_IDLE_MIN` 可调长）。
 - Magpie 加载插件时就启动引擎；引擎启动和每次登录后都会预热各账号，第一条消息不用等冷启动。
 - 引擎每 30 分钟检查一次：超过 6 小时没被唤醒的账号，会续一次会话并唤醒它的虚拟机。这不计入使用，也不会推迟浏览器的闲置关闭。
+- 冷启动时各账号并行预热，额度读取同时最多 3 个账号；驱动协议的热路径测量方法和实测数字见 [`docs/perf.md`](docs/perf.md)。
 
 <a name="readme-troubleshooting"></a>
 
@@ -366,6 +367,7 @@ npm run typecheck      # TypeScript 类型检查（源码与测试都在严格�
 npm run no-javascript  # 确认仓库里没有 .js / .mjs 源文件
 npm run build:engine   # 用 Go 构建当前平台的本地引擎
 npm run test:go        # Go 单元测试
+npm run bench          # Go 驱动协议基准测试（事件解码、请求编码、账号查询）
 npm test               # 插件契约 + TypeScript / Go 引擎集成测试
 ```
 
@@ -376,8 +378,8 @@ npm test               # 插件契约 + TypeScript / Go 引擎集成测试
 发布：先把 `package.json` 的版本号和 `CHANGELOG.md` 里同名小节准备好，再推送同名 tag。`.github/workflows/release.yml` 会校验 tag 与版本号一致、跑完整测试、`npm pack`，然后把 tgz 和 `assets/icon.png`、`assets/icon.ico` 传到 GitHub Release，发布说明取自 CHANGELOG 对应小节。补发已有 tag 时，在 Actions 里手动触发 `release` 并填入 tag。
 
 ```sh
-git tag v0.10.0
-git push origin v0.10.0
+git tag v0.11.0
+git push origin v0.11.0
 ```
 
 没装浏览器时，用到浏览器的测试会自动跳过。Linux 环境可以用 Docker 跑：
@@ -417,7 +419,7 @@ MuseWeb2Magpie
 
 ## <img src="assets/readme/icons/roadmap.svg" width="24" height="24" alt=""> 状态与路线
 
-当前版本 **0.10.0**：TypeScript 源码、Go 原生 loopback 引擎、稳定的网页账号接入、会话复用、工具调用、额度卡片与自动续期。
+当前版本 **0.11.0**：TypeScript 源码、Go 原生 loopback 引擎、稳定的网页账号接入、会话复用、工具调用、额度卡片与自动续期；冷启动与驱动协议经过一轮性能剖析和优化。
 
 路线上的工作主要是提升与网页改版的兼容性、改进错误恢复与诊断，以及让引擎的部署形态更灵活。图片、文件上传与生图生视频不在计划内——那是 muse2api 的方向。
 

@@ -1,36 +1,54 @@
 # 价格 (Magpie Models Price)
 
-一个 Magpie 页面插件，基于 [models.dev](https://models.dev) 官方公价数据库与 Magpie 本地账单/用量系统（`usage.jsonl`），按模型自动聚合展示所有渠道价格，支持官方公价匹配、自定义设价、已启用筛选、多维排序与真实 API 花费口径切换。
+一个 **纯页面插件**（page-only）的 Magpie 模型价格与用量面板：读取 [models.dev](https://models.dev) 公价与 Magpie 本地账单/用量（`usage.jsonl`），按模型聚合展示所有渠道价格、上下文用量与真实 API 花费。页面不注册任何供应商（provider），也不启动插件宿主；模型清单与保存应用由配套 CLI 完成。
 
 ![价格界面](docs/images/screenshot.png)
 
+## 为什么是纯页面插件
+
+从 v2.0.0 起本插件只声明 `magpie.page`，没有 `main` / `index.js` 服务端入口，因此：
+
+- Magpie 的「插件」列表只显示 **页面** 徽章，不再把你当成一个供应商插件；
+- 不会在每次 Magpie 启动、开关插件时拉起插件宿主；
+- 页面运行在 Magpie 的 sandbox 里（`connect-src 'none'`），只通过 `magpie.read` 读用量、`magpie.options` 保存自己的选项，不直接写任何 Magpie 配置文件。
+
+代价是页面自己无法写 `settings.json` / `providers.json`。所以安装后需要运行一次 `sync` 生成模型清单；在页面里改完价格后运行 `apply`（或让 `watch` 常驻）把改动写入 Magpie。这是纯页面插件的边界，不是缺陷。
+
+## 安装与首次使用
+
+```bash
+magpie plugin add magpie-models-price
+npx magpie-models-price sync     # 生成页面数据（安装后必须跑一次）
+```
+
+`sync` 会读取 Magpie 的 `providers-state.json` 与 models.dev 公共目录，把模型清单写到 **Magpie 实际加载的那份插件目录** 的 `page/models-data.js`（不是 npx 临时目录）。本地开发可直接 `magpie plugin add /path/to/magpie-models-price`。
+
+### 页面里改价之后
+
+```bash
+npx magpie-models-price apply    # 应用页面保存的价格 / 峰谷设置（幂等，同一笔只应用一次）
+npx magpie-models-price watch    # 可选：常驻监听，页面一保存就自动 apply，并刷新模型数据
+npx magpie-models-price doctor   # 排查：打印配置目录、实际页面目录、数据与选项状态
+```
+
+页面保存的是「待应用」的 options（带 `applyToken`）；`apply` 只写你改动过的键，不会覆盖你在 Magpie 自己编辑器里设的价格，也不会给你没有的 provider 添加价格。`watch` 适合经常调价的用户，默认每 3 秒检查一次。
+
 ## 功能特性
 
-- **按模型聚合展示**：同一原生模型（如 `gemini-3.8-flash`）自动归并为一张卡片，直观呈现所支持的所有供应商重叠图标与渠道列表。
-- **真实用量与 Token 统计**：Magpie 窗口内通过宿主 `usage:day`（全量历史）与 `usage:summary`（today/7d/30d）读取，独立 Web UI 直连本地 `/api/usage`；总调用次数、Token 消耗与模型用量徽标在打开、聚焦和每 30 秒自动刷新，不再停在构建时的静态快照。
-- **已启用筛选**：一键过滤出当前已启用的活跃模型与渠道，停用渠道一目了然。
-- **渠道类型筛选（付费 API / 账号登录）**：按 providers-state 的 `billingKind=payg` 与 `key.set` 判定「付费 API」，其余 plan/subscription 归为账号登录；筛选作用到组内渠道，不再让订阅渠道混进 API 结果。
-- **多维度排序**：智能排序（在用的优先：已启用且有调用 → 有调用 → 已启用 → 有价 → 其他）、按调用次数、按 Token 消耗、按价格（由低到高 / 由高到低）、按渠道数量、按名称（A-Z）。价格排序一律用闲时基础价，不会因为当前是高峰时段而跳动。
-- **模型后缀智能归类**：同一渠道里的 `-max` / `-auto` / `-official` / `-highspeed` / 日期快照（`-0731`、`-261017`）/ `-antidowngrade` 等变体会归到同一族合成一张卡，条件是「去掉后缀后的基础模型在同渠道确实存在且价格一致」——`qwen4` 与 `qwen4-max` 这种同名不同价的两份价目不会被误并。组的用量按同族所有变体累加，不再只取一个键。
-- **分时峰谷计价（模型级设置）**：models.dev 列的就是原价（闲时价），高峰价 = 原价 × 该模型设置的倍率。**官方价目表里真正分时定价的是 DeepSeek 系模型**——DeepSeek 官方、Command Code、Ollama Cloud，以及阿里百炼 / 火山方舟 / 腾讯 TokenHub 等转售的 DeepSeek，默认工作日 09:00-12:00 与 14:00-18:00（Ollama Cloud 例外，为 12:00-18:00 UTC），倍率 ×2；其他模型全天同价，但也可以在弹窗里单独开启并自定义时段与倍率。每个模型的峰谷配置（启用、倍率、时段）都在「修改定价」弹窗内编辑，首页不再有峰谷卡片。保存时会写入插件 options 的 `modelPeaks`，并汇总同步到 Magpie `providers.json` 的渠道 `rateWindows`（Magpie 只支持渠道级时段，同一渠道的模型需配置一致；冲突时保持原样并报告）。
-- **口径提醒（填的是峰价还是谷价）**：编辑弹窗顶部有常驻横幅，输入框标签后面有「闲时价 / 高峰价 / 全天同价」角标，随「上面填的是」分段控件实时切换。填高峰价时横幅会把「保存时 ÷2 换成闲时价、高峰时段 Magpie 再 ×2」讲清楚——填错口径不会报错，只会让 Magpie 按半价或双倍计费，事后极难发现。峰谷卡片底部另外提示「当前哪些渠道真的按小时计费」，一个都没有时直接说明开关只影响本页价签。
-- **保存后自查价格是否生效**：保存后页面会调 `GET /api/verify`，把插件里的自定义价与 `settings.json` 的 `modelPrices` 逐键逐字段比对，提示里给出「已核对 N 条全部一致」或「⚠️ 未生效：某键在 Magpie 计费表里是 $x/$y」。
-- **历史用量的金额会跟着变**：`usage.jsonl` 与 `~/.cache/magpie/calls-v15` 只存 Token，不存金额；Magpie 每次读用量都按当前 `modelPrices`（及高峰倍率）现算。所以改价后历史账单金额立即按新价重算，没有「历史数据需要单独刷新」这回事。
-- **峰谷按模型设置**：每个模型在定价弹窗里有独立的「该模型参与峰谷分时计价」开关、倍率输入（0.001–1000）、最多 8 条时段（星期 / 起止，结束早于开始表示跨零点，本机时钟）。默认按官方价目表：DeepSeek 系开启 ×2，其他模型关闭；模型卡片标题旁的「峰谷 ×倍率」角标可快速开关。配置存进插件 options 的 `modelPeaks`（`{"deepseek-v4-pro": {enabled, rate, windows}}`）。写进 `settings.json` 的始终是闲时价，高峰时段由 Magpie 按渠道 `rateWindows` 的倍率计费。
-- **账单统计口径切换**：
-  - **只记录真实 API 花费**：包月、订阅与免费额度渠道（如 Trae, WorkBuddy, Antigravity）免计费（$0.00），精准记录掏现金的 API 支出；切换后 ≤60 秒落盘，**历史用量会一起按 $0 重算**（Magpie 不存每行成本，按当前价计费）；
-  - **显示所有渠道等值公价**：将所有模型消耗按市场公价换算等值市值，清晰掌握各渠道抵扣价值。
-- **公价自动匹配**：自动比对识别未定价模型，提供原厂官方公价参考并支持一键全量应用。
-- **灵活自定义定价**：
-  - 支持指定特定渠道独立调价（如 `antigravity/claude-sonnet-4-6`）；
-  - 支持全网通配调价（如 `*/claude-sonnet-4-6`）。
-- **原子写入与账单联动**：设定以临时文件 + rename 原子写入 `settings.json`，只合并 `modelPrices` 键，不覆盖其他设置，也不会让 Magpie 读到半截文件；用量看板、会话统计与托盘花费在同一份价格上重算（最迟约 60 秒落盘）。
-- **幂等同步**：只有价格真的变化时才写 `settings.json`（键序无关比较），未变化时既不重写也不重扫全量 catalog；插件加载、每次 `config()` 与 60 秒定时器都不再让宿主阻塞或反复改写 Magpie 自己的文件；宿主没给出有效 `mode` 时按「什么都不改」处理，绝不回落到某个默认模式覆盖用户已选口径。
-- **流式响应式布局**：完美适配窄屏与侧边栏极窄窗口，控件与内容流式自适应排版。
+- **按模型聚合展示**：同一原生模型（如 `gemini-3.8-flash`）自动归并为一张卡片，展示所有供应商渠道与重叠图标。
+- **真实用量与 Token 统计**：通过 `usage:day`（全量历史）与 `usage:summary`（today/7d/30d）读取，打开、聚焦与每 30 秒自动刷新。
+- **已启用筛选**：一键过滤当前已启用的活跃模型与渠道。
+- **渠道类型筛选**：按 `billingKind=payg` 与 `key.set` 区分「付费 API」和「账号登录」。
+- **多维度排序**：智能排序（在用优先，同档按 Token 降序）、调用次数、Token 消耗、价格高低、渠道数、名称。
+- **模型后缀智能归类**：`-max` / `-auto` / `-official` / `-highspeed` / 日期快照 / `-antidowngrade` 等变体归为一族；`qwen4` 与 `qwen4-max` 这种同名不同价不会被误并。
+- **分时峰谷计价（模型级设置）**：官方价目里真正分时的是 DeepSeek 系模型，默认工作日 09:00-12:00 / 14:00-18:00（Ollama Cloud 为 12:00-18:00 UTC）×2；其他模型全天同价，可在弹窗单独开启并自定义时段与倍率。保存时会汇总同步到 Magpie `providers.json` 的渠道 `rateWindows`（Magpie 只支持渠道级时段，冲突时保持原样并报告）。
+- **口径提醒**：编辑弹窗顶部常驻横幅与「闲时价 / 高峰价」角标，填高峰价时明确展示 ÷倍率换算；写进 `settings.json` 的始终是闲时价，高峰由 Magpie 的 rateWindows 计费。
+- **账单统计口径切换**：只记录真实 API 花费（订阅/免费渠道 $0）或显示所有渠道等值公价；历史用量按当前 `modelPrices` 重算。
+- **公价自动匹配**：自动比对未定价模型，支持一键填入全部公价（写入后需 `apply`）。
+- **自定义定价**：支持单渠道定价（`antigravity/claude-sonnet-4-6`）与全网通配（`*/claude-sonnet-4-6`）。
+- **原子写入**：插件写 `settings.json` 时用临时文件 + rename，只合并 `modelPrices`，不覆盖其他设置。
 
-## 配置目录与本地服务
-
-插件读写的就是 Magpie 自己那份配置，口径与宿主 `internal/appdir` 一致：
+## 配置目录
 
 | 用途 | 位置 |
 | --- | --- |
@@ -38,37 +56,43 @@
 | models.dev 缓存 | `$XDG_CACHE_HOME/magpie/`，未设置时 `~/.cache/magpie/` |
 | 主目录 | `HOME`；Windows 上为 `USERPROFILE` |
 
-`XDG_*` 只有写成绝对路径才生效（与宿主的 `rooted()` 判断一致），相对值会被忽略并回落到主目录。首次运行时 `~/.config/magpie` 尚不存在也会自动创建。
+`XDG_*` 只有写成绝对路径才生效（与宿主 `internal/appdir` 的判断一致），相对值会被忽略并回落到主目录。首次运行时 `~/.config/magpie` 尚不存在也会自动创建。
 
-独立 Web UI（`node index.js ui`）默认只监听 `127.0.0.1:3456`，可用 `PORT` / `HOST` 覆盖。服务会改写 `settings.json` 与 `providers.json`，因此不绑局域网地址，CORS 也只回显 `localhost` / `127.0.0.1` 来源——外部网页无法通过跨域请求改写你的价格。
+插件本身不启动任何 HTTP 服务；页面通过 Magpie bridge（`magpie.read` / `magpie.options`）工作。可选命令 `node bin/magpie-models-price.js ui` 会启动独立 Web 控制台（默认 `127.0.0.1:3456`，只绑回环），它同样只在你显式保存时写配置。
+
+**读权限**：manifest 只声明 `usage:summary` / `usage:day`，不申请 `providers:list`，因此页面看不到供应商列表权限之外的信息；供应商名称与启用状态由本地 `sync` 生成进 `page/models-data.js`。
 
 ## 开发与测试
 
 ```bash
-node check.js      # 16 组自测，覆盖目录解析、首次写入、服务边界与页面 CSP 规范
+node check.js      # 21 组自测：目录解析、保存只写改动、纯页面清单、CLI sync/apply、服务边界、页面 CSP
 ```
 
-CI 在 ubuntu / macOS / Windows 三平台 × Node 20/22/24 上跑同一套测试，并检查打包产物不含任何本地配置。
-## 命令行工具（可选）
+CI 在 ubuntu / macOS / Windows 三平台 × Node 20/22/24 跑同一套测试，并检查打包产物不含任何本地配置。
 
-页面主要通过图形界面直接操作，同时也支持在终端作为轻量 CLI 脚本运行：
+## 命令行工具
 
 ```bash
-# 查看所有模型匹配与定价状态
-node index.js list
-
-# 切换统计口径为仅记录 API 真实花费
-node index.js mode api-only
-
-# 切换统计口径为显示所有渠道等值公价
-node index.js mode all
-
-# 一键将所有 models.dev 建议公价写入 Magpie
-node index.js sync
-
-# 预览拟同步的设价命令（不实际写入）
-node index.js sync --dry-run
+magpie-models-price sync [--force]   # 生成页面数据（安装后 / 模型变化后）
+magpie-models-price apply            # 应用页面保存的价格与峰谷
+magpie-models-price watch            # 常驻：自动 apply + 刷新页面数据
+magpie-models-price doctor           # 显示实际路径和状态
+magpie-models-price list             # 列出未定价模型与建议公价
+magpie-models-price mode api-only    # 切换统计口径（仅 API 花费）
+magpie-models-price mode all         # 切换统计口径（全部等值公价）
+magpie-models-price match-public     # 把 models.dev 公价应用到全部未定价模型
+magpie-models-price set <model> <in,out,cache_read,cache_write>
+magpie-models-price reset <model>
+magpie-models-price ui               # 可选独立 Web 控制台
 ```
+
+## 升级说明（v1 → v2）
+
+v2.0.0 移除了旧的 provider 服务端入口（`main` / `index.js`）与 `providers:list` 权限：这是一次有意的「只作为页面」改造。升级后：
+
+1. 运行 `npx magpie-models-price sync` 重新生成页面数据；
+2. 如果之前靠「保存后插件重载」自动落盘，改为 `npx magpie-models-price apply`，或让 `watch` 常驻；
+3. 插件行不再显示「供应商」徽章，只保留「页面」。
 
 ## 许可证
 MIT License © zrtzrt
