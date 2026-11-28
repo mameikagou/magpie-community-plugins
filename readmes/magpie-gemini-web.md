@@ -6,7 +6,7 @@
 
 让 [Magpie](https://usemagpie.ai/) 通过你的 Google 账号使用 **Google AI Studio** 与 **Gemini 网页版**，也可在 [Agent2API](https://github.com/aimod-cc/Agent2API) 中加载。插件在本机自动运行 [AIStudio2API](https://github.com/Mag1cFall/AIStudio2API) 与 [gemini-web2api-go](https://github.com/zexadev/gemini-web2api-go)，提供对话、原生工具调用、Nano Banana 图片生成与 Deep Research 等能力。
 
-> **新模型支持说明**：两个 Provider 均已收录 **`gemini-4-hydrogen`** 与 **`gemini-4-carbon`**。AI Studio 默认自动跟随官方稳定版，Hydrogen 含 `xhigh` 思考档位；Gemini Web 从一键本地后端 **`4.30.0-magpie.1`** 起提供独立模型 ID，其中 Hydrogen 支持登录账号（含免费账号），Carbon 需付费 / Ultra 等具备权益的账号，旧 `gemini-4-argon` 名称保留为 Carbon 别名。上游 v4.31.0 已包含付费模型 `gemini-4-neon` 与其思考档，`gemini-3.1-pro` 保留为 Neon 兼容别名。优化后端 **`4.31.0-magpie.2`** 在这份目录上把 Argon/Carbon 身份错误排除出代理熔断。
+> **新模型支持说明**：两个 Provider 均已收录 **`gemini-4-hydrogen`** 与 **`gemini-4-carbon`**。AI Studio 默认自动跟随官方稳定版，Hydrogen 含 `xhigh` 思考档位；Gemini Web 从一键本地后端 **`4.30.0-magpie.1`** 起提供独立模型 ID，其中 Hydrogen 支持登录账号（含免费账号），Carbon 需付费 / Ultra 等具备权益的账号，旧 `gemini-4-argon` 名称保留为 Carbon 别名。上游 v4.31.0 起已包含付费模型 `gemini-4-neon` 与其思考档，`gemini-3.1-pro` 保留为 Neon 兼容别名。优化后端 **`4.33.0-magpie.1`**（上游 v4.33.0）在这份目录上把 Argon/Carbon 身份错误排除出代理熔断，并要求 Cookie 含 `OSID`。
 
 ## 怎么选？
 
@@ -22,7 +22,7 @@
 | **图片生成** | Nano Banana 系列模型，供 Magpie 的图片生成使用（需要 Magpie v0.1.2075+，见下文） | 不支持 |
 | **登录方式** | 自动安装官方后端，导入账号后确认连接 | 用无痕窗口登录并复制 `cookie` |
 | **额度卡片** | 显示冷却中的模型与恢复时间 | 同步网页版 **5 小时** 与 **每周** 用量及重置时间 |
-| **本地后端** | AIStudio2API（自动安装并跟随官方稳定版） | gemini-web2api-go (`4.31.0-magpie.2` 优化版) |
+| **本地后端** | AIStudio2API（自动安装并跟随官方稳定版） | gemini-web2api-go (`4.33.0-magpie.1` 优化版) |
 
 ---
 
@@ -71,7 +71,7 @@
 2. 按提示填写 **Google 账号索引**：复制 Cookie 的同一窗口地址若为 `/u/4/app`，填 `4`；单账号会话可留空（`0`）。无痕窗口中的索引可能不同，不能直接沿用日常窗口的编号。然后在浏览器**无痕 / 隐私窗口**（推荐 Firefox）获取 Cookie：
    1. 访问 <https://gemini.google.com/app> 并登录 Google 账号；
    2. 按 `F12`（macOS 按 `⌥⌘I`）切到 **Network（网络）**，刷新页面；
-   3. 点击任意 `gemini.google.com` 请求 → **Headers** → **Request Headers**，复制 `cookie` 的值粘贴回 Magpie；
+   3. 点击任意 `gemini.google.com` 请求 → **Headers** → **Request Headers**，复制 `cookie` 的完整值粘贴回 Magpie。整串必须含 `OSID`（从 gemini.google.com 的请求复制；在 google.com 页面导出，或只抄旧的那几项，都会漏掉它，登录会被跳回 Google 登录页）；
    4. **直接关闭无痕窗口，不要点退出登录**（点退出会使 Cookie 失效）。
 3. 插件验证账号可用后即完成登录。想添加更多账号，重复上述步骤即可。
 
@@ -242,11 +242,11 @@ magpie plugin options magpie-gemini-web '{"studio":{"proxy":"http://127.0.0.1:78
 
 **Gemini Web 优化后端升级与回退：**
 - [#53](https://github.com/BUKOWSKIREAL/magpie-gemini-web/issues/53) 的多账号索引漏传已修复，需重新导入受影响的 Cookie 或在后端账号管理中修正索引。上游 v4.30.0 已收录独立的 `gemini-4-hydrogen` / `gemini-4-hydrogen-thinking` 与 `gemini-4-carbon`，并兼容旧 Flash、Argon 名称的显示名变化；显式请求 Hydrogen 时仍会拒绝旧 Flash 或其它模型的静默降级。Carbon 的思考档目前可能按上游普通档回答。
-- 插件钉住 [4.31.0-magpie.2](https://github.com/BUKOWSKIREAL/magpie-gemini-web/releases/tag/backend-v4.31.0-magpie.2)（基于上游 v4.31.0，含 Neon / Hydrogen 目录、`request_timeout_sec` 上限 1200 秒、XSRF 缓存、请求取消传播、工具调用提前收尾与 Argon/Carbon 校验）。`strict_model` 关闭时，Argon/Carbon 身份不符或身份缺失不计入代理 `fail_count`，也不在同一账号上重试；连接失败仍会熔断。这个标签的二进制尚未上传，停止旧后端后的自动安装会 404，不能把它当成已经可下载的 release。对话请求按上游沉默计时：Google 让请求排队时每 60 秒发一次心跳，后端会一直等到出字；默认情况下，连续 `request_timeout_sec`（180 秒）没有任何数据才放弃这一次；是否重试仍受 `retry_on_timeout` 和是否已向客户端输出内容等规则约束，还在出字的长回复不会被这个看门狗截断。另支持上游 `stream_idle_timeout_sec`（默认 0）作为额外的流式空闲超时。
+- 插件钉住 [4.33.0-magpie.1](https://github.com/BUKOWSKIREAL/magpie-gemini-web/releases/tag/backend-v4.33.0-magpie.1)（基于上游 v4.33.0，含 Neon / Hydrogen 目录、`request_timeout_sec` 上限 1200 秒、XSRF 缓存、请求取消传播、工具调用提前收尾与 Argon/Carbon 校验）。`strict_model` 关闭时，Argon/Carbon 身份不符或身份缺失不计入代理 `fail_count`，也不在同一账号上重试；连接失败仍会熔断。这个标签的二进制尚未上传，停止旧后端后的自动安装会 404，不能把它当成已经可下载的 release。上游 v4.31.1 起 gemini.google.com 缺 `OSID` 会把所有登录号 302 到登录页（[#83](https://github.com/BUKOWSKIREAL/magpie-gemini-web/issues/83) 里看到的要反复登录、Cookie 池像是空的）；一键登录会拒绝不含 `OSID` 的粘贴。v4.33.0 另有浏览器扩展把 cookie 推到 `POST /admin/api/cookies/sync`。对话请求按上游沉默计时：Google 让请求排队时每 60 秒发一次心跳，后端会一直等到出字；默认情况下，连续 `request_timeout_sec`（180 秒）没有任何数据才放弃这一次；是否重试仍受 `retry_on_timeout` 和是否已向客户端输出内容等规则约束，还在出字的长回复不会被这个看门狗截断。另支持上游 `stream_idle_timeout_sec`（默认 0）作为额外的流式空闲超时。
 - **旧版升级**：插件不会打断运行中的后端。先停止旧进程（PID 见数据目录 `backend.pid`），下次启动 Magpie 或发请求时会自动更新二进制并保留原有配置与账号。
 - **回退官方版 / 恢复优化版**（停止后端后在插件目录执行）：
   ```bash
-  npm run backend:install:upstream  # 回退并固定使用官方 v4.31.0
+  npm run backend:install:upstream  # 回退并固定使用官方 v4.33.0
   npm run backend:install           # 恢复默认优化版
   ```
 - 源码复现构建与发布流程见 [docs/backend-release.md](docs/backend-release.md)。

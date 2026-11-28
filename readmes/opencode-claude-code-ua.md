@@ -4,7 +4,7 @@
 
 npm 包名：[`opencode-claude-code-ua`](https://www.npmjs.com/package/opencode-claude-code-ua)。供应商 ID：`ua-pro`。无 npm 运行依赖。
 
-> GitHub 版 **0.3.14** 修复独立供应商移除后仍占用面板的问题，支持原生登录时选择 Web 模板版本，并兼容 AnyRouter 签到。要安装此版本，在 Magpie 手动添加框填写 `github:1466109846/ua-pro#v0.3.14`。管理页侧栏显示实际运行的插件版本。[更新日志](CHANGELOG.md)
+> GitHub 版 **0.3.15** 修复 Gemini 兼容转发和模型目录分页，完善 SSE 流式测试校验，并为通过 UA PRO Web 添加的端点提供模型选择与直接测试。要安装此版本，在 Magpie 手动添加框填写 `github:1466109846/ua-pro#v0.3.15`。管理页侧栏显示实际运行的插件版本。[更新日志](CHANGELOG.md)
 
 ## 操作入口索引
 
@@ -263,6 +263,10 @@ Messages 模型应核对上游路径为 `/v1/messages`；模型服务可能与�
 
 独立 Node 进程不继承 Magpie 账号代理。可从 Magpie 打开管理页，或为独立进程配置网络环境。
 
+**Magpie 原生菜单的“测试此模型”是灰色？**
+
+当前宿主可能把插件的 Gemini 模型标记为不可独立测试。本版不修改宿主菜单；请打开 **UA PRO 管理 → 连接与模型 → 对应连接的测试**，选择模型后点击 **发送实际测试**，核对连接和最终地址再确认发送。模型列表检查只读取目录，不验证生成能力。
+
 **模型列表成功，生成却返回 404？**
 
 检查上游协议、协议根路径和模型引用。目录读取成功不代表站点支持该生成接口。
@@ -278,3 +282,8 @@ Messages 模型应核对上游路径为 `/v1/messages`；模型服务可能与�
 - [npm 包](https://www.npmjs.com/package/opencode-claude-code-ua)
 
 本项目按 MIT 许可分发，版权和第三方来源见 [LICENSE](LICENSE) 与 [NOTICE.md](NOTICE.md)。
+
+## 更新日志
+
+- [完整更新日志](CHANGELOG.md)
+- [GitHub Releases](https://github.com/1466109846/ua-pro/releases)

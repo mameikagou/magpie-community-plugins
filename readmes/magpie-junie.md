@@ -4,7 +4,8 @@
 
 直连 Grazie 上游时，free tier 账号（`licenseType:NONE`）会被 403 拒绝；但 Junie CLI 内部的 `junie-lite` 通道可以正常回答。因此本插件提供两种模式：
 
-- **桥接模式（推荐，free tier 可用）**：随附 `bridge-server.mjs` 启动一个本地 OpenAI 兼容服务，后端调 CLI headless 的 `junie-lite` 通道；插件配 `bridgeUrl` 后把请求转给它。CLI 版本由桥接服务自动保鲜（6h 检查 + 自动更新）。
+- **桥接模式（推荐，free tier 可用）**：随附 `bridge-server.mjs` 启动一个本地 OpenAI 兼容服务。默认后端**直连 Ingrazzio 的 `/v1/responses`**（free 通道，模型 `gpt-6-luna`），`tools` 原样透传、上游原生返回 `tool_calls`——Codex、Claude Code 等 harness 的 function calling 能完整闭环（权限、审计、多轮都正常）。插件配 `bridgeUrl` 后把请求转给它。
+- **CLI 后端（可选）**：`JUNIE_BACKEND=cli` 时桥接改为调用 CLI headless，由 CLI 自己执行搜索/改文件等工具，再把结果写进答案。适合"让模型独立跑完任务"，但 harness 侧的 tool 协议不会触发。
 - **直连模式**：基于逆向项目 [fabienfleureau/junie-api](https://github.com/fabienfleureau/junie-api) 的上游抓包事实，直接请求 `ingrazzio-cloud-prod.labs.jb.gg` 的原生端点，需有效订阅 + 代理。
 
 > ⚠️ **风险声明**：Junie/Grazie 是 JetBrains 商业订阅服务，本项目不受 JetBrains 支持，可能随时失效。过度自动化或脚本化使用可能违反 [JetBrains AI Service Terms](https://www.jetbrains.com/legal/docs/terms/jetbrains-ai-service/)。请只用于自己的订阅，并自行承担账号风险。
@@ -61,32 +62,42 @@ NODE_USE_ENV_PROXY=1 node scripts/verify-refresh-pkce.mjs  # 真机验证续期/
 
 MIT — 本插件自身代码。Junie 与 JetBrains 是 JetBrains s.r.o. 的商标。
 
-## 本地桥接服务（junie-lite 通道）
+## 本地桥接服务（free 通道 + 原生工具调用）
 
-直连 Grazie 上游会因 `licenseType:NONE` 被 403 拒绝；但 Junie CLI 内部的 `junie-lite` 通道可以正常回答。本仓库提供 `bridge-server.mjs`，把 OpenAI chat completions 翻译成一次 CLI headless 调用：
+直连 Grazie 上游会因 `licenseType:NONE` 被 403 拒绝；但 free 通道（模型 `gpt-6-luna`）带上正确的 license 头后可以直接调用，而且**原生支持 OpenAI function calling**。`bridge-server.mjs` 把它包装成本地 OpenAI 兼容服务：
 
 ```sh
-node bridge-server.mjs                  # 默认 127.0.0.1:4141
-PORT=4142 JUNIE_MODEL=junie-lite node bridge-server.mjs
+node bridge-server.mjs                            # 默认 direct 后端，127.0.0.1:4141
+JUNIE_BACKEND=cli node bridge-server.mjs          # 切回 CLI 后端（由 CLI 自己执行工具）
+PORT=4142 JUNIE_TOKEN=... node bridge-server.mjs  # 指定端口 / 直接给 Bearer
 ```
 
-接口：
+direct 模式的链路：harness → magpie → 插件 `bridgeUrl` → 本服务 `POST /v1/chat/completions` → 转成 `POST https://ingrazzio-cloud-prod.labs.jb.gg/v1/responses` → 上游的 `function_call` 转回 `tool_calls`（流式按 SSE 事件增量转换）。
 
-- `GET /health` — 健康检查
-- `GET /v1/models` — 返回 `junie-lite`
-- `POST /v1/chat/completions` — OpenAI 兼容（支持 `stream: true`）
+放行的两个关键头（反编译 `IngrazzioLicenseHeadersKt` / `JunieProjectKt` 实证，2026-11-28）：
 
-配置（环境变量）：`PORT`、`HOST`、`JUNIE_BIN`（默认 `C:\Users\Robin\.local\bin\junie.bat`）、`JUNIE_MODEL`（默认 `junie-lite`）、`JUNIE_TIMEOUT_MS`（默认 120000）。
+| 头 | 值 | 说明 |
+|---|---|---|
+| `X-Forced-License-Free` | `2` | free license 协议版本号。写成 `true` 会被判旧客户端，返回 400 `UPDATE_REQUIRED` |
+| `Grazie-Agent` | `junie:cli` + `<CLI 版本>:<CLI 版本>` | 版本过旧同样被 `UPDATE_REQUIRED` 拦。服务读 `~/.local/share/junie/current` 自动跟随本机 CLI 版本 |
 
-**前置条件**：CLI 版本必须支持 free 模型。CLI 26.11.2 (4100.11) 实测被上游拒绝（`Your version of Junie doesn't support this free model, please update it first`），需升级到 26.11.3+。服务返回 `errors` 数组里的原始原因即 CLI 的报错。
+认证：默认复用本机 Junie CLI 登录态（DPAPI 解密，过期自动 refresh）；Linux/服务器场景可用 `JUNIE_TOKEN` 直接给 Bearer。
 
-技术要点：CLI 的 stdin 必须是真实文件（不能用 pipe，否则 Windows 报 `java.io.IOException: 函数不正确`）；`.bat` 必须经 `cmd /c` 执行；CLI stdout 混有日志，需解析其中 JSON 行。
+接口：`GET /health`（含 backend / cliVersion）、`GET /v1/models`、`POST /v1/chat/completions`（流式与非流式，含 `tool_calls`）。
 
-## CLI 版本自动维护
+环境变量：`JUNIE_BACKEND`（direct | cli，默认 direct）、`JUNIE_DIRECT_MODEL`（上游 wire name，默认 `gpt-6-luna`）、`JUNIE_MODEL`（对外模型名，默认 `junie-lite`）、`PORT`、`HOST`、`JUNIE_TOKEN`、`JUNIE_UPSTREAM`、`JUNIE_TIMEOUT_MS`、`JUNIE_BIN`（CLI 后端用）。
 
-桥接服务依赖 CLI 版本满足上游 free 模型门槛。服务内置自动版本维护（无需 Windows 计划任务或外部调度）：
+**代理**：上游对中国大陆 IP 直连 403。Node 下启动服务时加 `NODE_USE_ENV_PROXY=1` 并设 `HTTPS_PROXY`；Bun 下自动走代理选项。
 
-- 服务启动时后台检查一次 CLI 版本；每次对话前也会检查（**6 小时节流**）。
+CLI 后端的前置条件：CLI 版本必须满足上游 free 模型门槛（26.11.3+）。技术要点：CLI 的 stdin 必须是真实文件（pipe 在 Windows 报 `java.io.IOException: 函数不正确`）；`.bat` 必须经 `cmd /c` 执行；stdout 混日志且中文 Windows 上是 GBK，需先累积 Buffer 再解码。
+
+## CLI 版本维护
+
+上游按 `Grazie-Agent` 的版本判定客户端新旧。direct 后端不依赖 CLI 运行，但会读本机 CLI 的当前版本（`~/.local/share/junie/current`）拼进请求头，所以 CLI 升级后桥接会自动跟上；没装 CLI 时用兜底版本号。
+
+CLI 后端额外内置自动版本维护（无需 Windows 计划任务或外部调度）：
+
+- 服务启动时后台检查一次；每次对话前也会检查（**6 小时节流**）。
 - 发现新版本自动执行 `junie update` 并切换，同时清理上次中断留下的半成品下载文件。
 - 状态写在 `~/.config/magpie/junie-update-check.json`，`/health` 可查看最近检查结果。
 

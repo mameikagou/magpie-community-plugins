@@ -49,6 +49,8 @@ The plugin buffers a complete upstream response before delivering it. Temporary 
 
 Completed Responses with no answer, refusal, or usable output are recovered inside the same budget. This includes empty output, reasoning-only output, and commentary without a tool call. Valid final answers and explicit incomplete responses retain their meaning. [Recovery policy](docs/recovery-policy.md) documents the full decision flow and host boundaries.
 
+A lone `[DONE]`, a failed stream and truncated JSON are not successful chat replies. Numeric error codes inside an HTTP 200 response also count: `429` uses the rate-limit delay and `503` uses the service-error delay. Input-token counts and compacted context do not need to contain a chat answer.
+
 On its native Codex route, dao forwards QianDao's tool events without rewriting them. Tool discovery, free-form patches and namespaced calls keep their original formats. If Magpie takes over web search and offers it as a function, dao sends the request Magpie prepared and lets Magpie translate the reply. A streamed batch with a missing client tool call is recovered before any of its calls are delivered.
 
 For Codex V2 subagents, dao offers `spawn_agent`, `send_message` and `followup_task` upstream as plain functions. Magpie maps them back to Codex's collaboration tools, with the message readable by the recipient. Existing sealed tasks cannot be reopened: start a new task after updating. The plugin does not decrypt stored messages or change other providers or Codex settings.
@@ -75,6 +77,8 @@ Magpie stores the API key. dao stores settings, scheduling metadata, manually ad
 
 The **报错记录** tab shows each failure's local date and time, original numeric status or error code, attempt number and a plain-language explanation. It has category filters and lists 20 errors per page. The page shows the retry schedule, remaining shared cooldown, and each failure's earliest retry wait or observed wait if the next attempt has been recorded. The observed wait includes queueing. Older rows without a recorded wait display **未记录**. A later success in the same request marks the earlier failure as recovered. The percentage is based on the most recent 100 recorded upstream attempts, not on conversations or final request failures. The log survives host reloads and excludes client cancellations.
 
+Redirects and explicitly incomplete answers are not recoveries. If a scheduled retry never starts, the row keeps its original wait and shows **实际未重试**. When the settings service disconnects, both tabs mark the last snapshot as stale until a refresh succeeds. Waiting requests and page refreshes do not rewrite unchanged history.
+
 The plugin configures header forwarding and disables additional patience waiting and rate-limit rests for its own provider. Codex's default timeout and unrelated providers are left unchanged.
 
 The settings page uses loopback port **38418**. It serves configuration only; model traffic goes directly from the provider plugin to QianDao. If the port is occupied, chat remains available with the saved settings; change `settingsPort` in the plugin options to restore the page. Unlike routine URL and concurrency edits, changing that plugin option reloads Magpie's shared plugin host.
@@ -94,7 +98,7 @@ npm pack
 Pass a release archive as the final argument to test its contents:
 
 ```sh
-node tests/magpie-host.mjs /path/to/magpie /path/to/bun dao-0.1.0-rc.11.tgz
+node tests/magpie-host.mjs /path/to/magpie /path/to/bun dao-0.1.0-rc.12.tgz
 ```
 
 For comparison with the original gateway:

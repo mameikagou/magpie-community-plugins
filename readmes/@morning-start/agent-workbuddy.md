@@ -1,7 +1,7 @@
 # Magpie Agent for WorkBuddy
 
-[![npm](https://img.shields.io/npm/v/magpie-agent-workbuddy)](https://www.npmjs.com/package/magpie-agent-workbuddy)
-[![license](https://img.shields.io/npm/l/magpie-agent-workbuddy)](LICENSE)
+[![npm](https://img.shields.io/npm/v/@morning-start/agent-workbuddy)](https://www.npmjs.com/package/@morning-start/agent-workbuddy)
+[![license](https://img.shields.io/npm/l/@morning-start/agent-workbuddy)](LICENSE)
 [![magpie-plugin](https://img.shields.io/badge/topic-magpie--plugin-3ddc97)](https://github.com/topics/magpie-plugin)
 
 在 WorkBuddy（腾讯 WorkBuddy 桌面端）的模型菜单里用 [magpie](https://usemagpie.ai) 配置的模型和路由组。插件在 magpie 的 Agents 页新增一行 **WorkBuddy (Magpie)**，打开它，magpie 的模型目录就写进 `~/.workbuddy/models.json`；关掉它，写进去的条目原样撤回。
@@ -23,10 +23,19 @@ WorkBuddy 直接调用 magpie 的网关，所以没有本地代理、没有第�
 先在 magpie 里配好至少一个供应商（模型列表不是空的），再安装：
 
 ```sh
-magpie plugin add "github:morning-start/magpie-agent-workbuddy"
+magpie plugin add npm:@morning-start/agent-workbuddy        # npm 上的最新版
+magpie plugin add npm:@morning-start/agent-workbuddy@0.2.0  # 钉住某个版本
 ```
 
-或者在本仓库目录里：
+`npm:` 前缀让 magpie 直接去 npm 装，不先查社区插件列表 —— 网络读不到 `raw.githubusercontent.com` 时（国内常见），不带前缀的 `magpie plugin add @morning-start/agent-workbuddy` 会失败，加前缀就好。
+
+从源码装（永远跟 `main` 最新）：
+
+```sh
+magpie plugin add github:morning-start/magpie-agent-workbuddy
+```
+
+在本仓库目录里开发时：
 
 ```sh
 magpie plugin add .
@@ -90,6 +99,7 @@ magpie plugin add .
 
 - **只碰自己写的条目。** 台账 `~/.workbuddy/magpie-local-managed.json` 记录插件新建了哪些 id、写进去的内容指纹是多少。没有台账记录的条目（自带 WorkBuddy 行写的、你手写的）永远不动。
 - **`models.json` 永远是数组。** 写的时候整文件写成一个条目数组（WorkBuddy 自己的写法），你的条目和顺序都保留；`{"models": […]}` 这种外壳能被读进来，写回时规整成数组。写之前比对内容，没变化就不写。
+- **不跟 WorkBuddy 抢着写。** 动手前再核对一次文件的修改时间和大小：如果规划这一轮的时候 WorkBuddy 自己写过它，这一轮就放弃，下一轮重新读、重新规划。
 - **读不懂的 `models.json` 不动。** 解析失败只在状态里报 `models_unreadable`，绝不拿空列表覆盖它（UTF-8 BOM 会被容忍）。
 
 ## 诊断
@@ -117,7 +127,7 @@ magpie-workbuddy restore   # 立即撤回本插件写的条目（卸载前用）
 
 1. magpie → Agents → 关掉 **WorkBuddy (Magpie)**，等状态变成 `disconnected`；
 2. 想确认干净：`magpie-workbuddy status`，`removed` 里应列出它写过的 id；
-3. `magpie plugin rm magpie-agent-workbuddy`。
+3. `magpie plugin rm @morning-start/agent-workbuddy`。
 
 如果先删了插件、条目还留在 WorkBuddy 里，直接在 WorkBuddy 的模型设置里删掉它们即可。
 
@@ -126,10 +136,10 @@ magpie-workbuddy restore   # 立即撤回本插件写的条目（卸载前用）
 仓库里的 [AGENTS.md](AGENTS.md) 记了数据流、改代码的铁律、以及 WorkBuddy 5.11.3 里核对过的字段事实（改字段前请重新核对）。[CHANGELOG.md](CHANGELOG.md) 记每个版本。
 
 ```sh
-bun test        # 26 个单元测试，不需要 magpie、WorkBuddy 或网络
+bun test        # 29 个单元测试，不需要 magpie、WorkBuddy 或网络
 ```
 
-测试覆盖：条目字段符合 WorkBuddy 的校验规则、`connect()` 的输出、目录变化/手改/跳过/撤回的每一条规则，以及用临时 home 跑完整同步流程。
+测试覆盖：条目字段符合 WorkBuddy 的校验规则、`connect()` 的输出、目录变化/手改/跳过/撤回的每一条规则、WorkBuddy 自己写文件时的并发保护，以及用临时 home 跑完整同步流程。
 
 在一个隔离的 magpie 沙箱里验过（自己的 HOME、自己的网关端口）：
 

@@ -135,9 +135,11 @@ lite 默认**全量改写、严格前缀稳定**：每条消息从第一轮起�
 
 `session-dedup` 认同一个开关：默认也把正在发送的这一轮照常处理，显式 `preserveCurrentTurn: true` 才保护它。理由是同一个——只保护当前轮，等于让那条消息在下一轮里被改写一次，前缀跟着变。
 
-`test/prefix-stability.test.mjs` 就是这条验收：逐轮追加原文，每一轮发出的前缀必须与上一轮逐字节相同，默认档、稳妥档与每个无损引擎各测一遍。
+CCR 的 `preserveCurrentTurn` 默认 **`true`**：最后一条 assistant 之后的文本不换成 CCR 指针，没有 assistant 时全部保留；显式设为 `false` 恢复全量折叠。配置示例：`strategies.ccr: { enabled: true, preserveCurrentTurn: false }`。旧历史仍可压缩；当前内容成为历史时可能被改写一次，影响该处之后的提示缓存。这个开关只保护 CCR，不禁止其他策略改写，也不保护最后一条 assistant 本身或修复已有 marker；需要保护最近问答时使用全管线的 `preserve.lastTurns`。
 
-`preserve.lastTurns` 默认 `0`（不额外保护任何轮次）。设成 N 会把最近 N 轮排除在所有改写之外；那一轮滑出窗口时同样被改写一次，这是窗口本身带来的，不是 lite 的。
+`test/prefix-stability.test.mjs` 验证 middleware 路径的前缀稳定性（该路径不运行 CCR）；可信宿主中 CCR 的当前轮保护与历史转换由 `test/ccr-current-turn.test.mjs` 验证。
+
+`preserve.lastTurns` 默认 `0`（不额外保护任何轮次）。N 按 user 消息边界计数：普通 `user → assistant → user(当前)` 中，`1` 保护当前输入，`2` 还保护上一轮问答。受保护内容排除在所有改写之外；滑出窗口时可能被改写一次，这是窗口本身带来的，不是 lite 的。
 
 `preserve.system` 默认 `false`。开着它会把 system 段整段占位保护、跑完再还原，代价是依赖 system 内容的那一步（例如「同一段 system 写了两遍只留一份」）整段失效——上一版把它默认成 `true`，等于把那一步变成死配置。要绝对不动 system 的人显式写 `true`。
 

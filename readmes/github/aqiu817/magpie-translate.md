@@ -25,12 +25,17 @@ A two-pane translator — source on the left, translation on the right — for t
 The plugin host starts a local companion server (`127.0.0.1`, ports 3481–3484) that serves the real translation page; magpie's sidebar page is just a boot page that navigates itself there. The page is also reachable directly at `http://127.0.0.1:<port>` from any browser.
 
 - Translation requests are forwarded by the server to magpie's own gateway. **The gateway key lives only in the local server process — the page never sees it.**
+- **The server only serves its own page**: every `/api` request must carry the per-process token (delivered inside the page's HTML, checked with `timingSafeEqual`), and the Host and Origin are validated — anything but `127.0.0.1`/`localhost` gets a 403. A site open in your browser cannot spend your gateway through it.
 - Models are the ones already connected in magpie. With no pinned default, pick one in the top bar each time (image translation auto-picks a vision-capable model).
 
 ## Install
 
+Also in magpie's plugin market: magpie settings → 插件 → 发现, search "Translate".
+
+From the command line:
+
 ```
-magpie plugin add magpie-translate        # from npm (once published)
+magpie plugin add magpie-translate        # npm
 magpie plugin add github:aqiu817/magpie-translate
 magpie plugin add D:\path\to\magpie-translate   # local folder
 ```
@@ -53,7 +58,7 @@ Every option can be changed in the page's settings drawer (`gatewayUrl`/`gateway
 ## Caveats
 
 - **Auto-pick pitfall**: with no pinned page model, text translation falls to the first model in the gateway list — pin a reliable default in the settings drawer if your list is uneven.
-- **Stuck plugin host**: with many failing plugins the host may not start (a known issue). Start the companion server manually: double-click `scripts/start-server.cmd`, or use `scripts/install-autostart.cmd` for silent autostart at login.
+- **Stuck plugin host**: with many failing plugins the host may not start (a known issue). Start the companion server manually: double-click `scripts/start-server.cmd`, or use `scripts/install-autostart.cmd` for silent autostart at login (note: the autostarted server keeps running whenever you're logged in, even with magpie closed; it only serves its own translation page and ignores every other origin).
 - **Sidebar page files are cached** by magpie's single-webview router — restart magpie after editing page files (editing plugin options is fine; those hot-reload).
 
 ## Development

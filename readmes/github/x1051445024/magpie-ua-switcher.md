@@ -77,9 +77,9 @@ curl http://127.0.0.1:3426/set/codex        # Codex CLI
 curl http://127.0.0.1:3426/set/claude-code  # Claude Code
 curl http://127.0.0.1:3426/set/pi           # pi (dual identity, auto by protocol)
 curl http://127.0.0.1:3426/set/zcode        # ZCode client
-curl http://127.0.0.1:3426/set/opencode     # opencode (Bun runtime UA + session headers)
+curl http://127.0.0.1:3426/set/opencode     # opencode (OpenCode v2 CLI UA + session headers)
 curl http://127.0.0.1:3426/set/antigravity  # Antigravity Hub
-curl http://127.0.0.1:3426/set/off          # off — magpie's default UA
+curl http://127.0.0.1:3426/set/off          # off — stop rewriting (requests still pass through plugin/middleware)
 curl http://127.0.0.1:3426/state            # current state
 curl -X POST http://127.0.0.1:3426/config -H "content-type: application/json" \
   -d '{"excludeProviders":["zcode"],"versions":{"codex":"0.170.0"}}'  # scripted edits
@@ -89,17 +89,17 @@ curl -X POST http://127.0.0.1:3426/config -H "content-type: application/json" \
 
 ## Built-in profiles
 
-The OS segment of codex/pi/antigravity UAs is generated from the machine the plugin runs on, matching what the real clients do. Versions resolve in layers: **built-in defaults < the local Antigravity install (antigravity only) < values fetched from npm < a hand pin in the config's `versions` field**. `antigravity` is probed from the local install's `app.asar` root `package.json` (the same value the running language server gets as `--override_ide_version`); `bun` (opencode's runtime UA) and `antigravity` are never fetched from npm — the Bun version exists only inside opencode's compiled binary, and Antigravity ships no npm package. The npm layer refreshes itself in the background (on plugin load, then at most every `updateEveryHours`) for the clients whose npm package *is* their version — codex (`@openai/codex`) and claude-code (`@anthropic-ai/claude-code`) — trying npmjs.org first with npmmirror.com as fallback (plus your `registry`, if set). On change the UAs in `providers.json` are rewritten immediately. aiSdk, pi and zcode are never auto-fetched: aiSdk is a dependency ZCode bundles internally (npm's latest would assemble a UA the real client never sent), and pi/zcode ship no package to read — bump the built-in or pin one: `"versions": {"zcode": "3.99.0"}`. The web page has a "check for updates" button; `curl -X POST http://127.0.0.1:3426/versions/refresh` forces a fetch and `curl http://127.0.0.1:3426/versions` shows each version and where it came from (builtin / fetched / pinned). A whole profile can also be overridden per machine through the config's `profiles` field.
+The OS segment of codex/pi/antigravity UAs is generated from the machine the plugin runs on, matching what the real clients do. Versions resolve in layers: **built-in defaults < the local Antigravity install (antigravity only) < values fetched from npm < a hand pin in the config's `versions` field**. `antigravity` is probed from the local install's `app.asar` root `package.json` (the same value the running language server gets as `--override_ide_version`) and ships no npm package. The npm layer refreshes itself in the background (on plugin load, then at most every `updateEveryHours`) for clients backed by official npm packages — `codex` (`@openai/codex`), `claude-code` (`@anthropic-ai/claude-code`), `pi` (`@earendil-works/pi-ai`), `piClaude` (extracted from `@earendil-works/pi-ai`'s `dist/api/anthropic-messages.js`, falling back to built-in), and `opencode` (`@opencode/cli`) — trying npmjs.org first with npmmirror.com as fallback (plus your `registry`, if set). On change the UAs in `providers.json` are rewritten immediately. `zcode` and `aiSdk` are never auto-fetched: `aiSdk` is a dependency ZCode bundles internally (npm's latest would assemble a UA the real client never sent), and `zcode` ships no public npm package — bump the built-in or pin one: `"versions": {"zcode": "3.99.0"}`. The web page has a "check for updates" button; `curl -X POST http://127.0.0.1:3426/versions/refresh` forces a fetch and `curl http://127.0.0.1:3426/versions` shows each version and where it came from (builtin / fetched / pinned). A whole profile can also be overridden per machine through the config's `profiles` field.
 
 | id | User-Agent | companion headers |
 |---|---|---|
 | `codex` | `codex_cli_rs/0.164.0 (Windows 10.0.19045; x86_64) WindowsTerminal` | `originator: codex_cli_rs`, session fingerprint `x-codex-window-id` and `session-id` (UUID, satisfies Sub2API `codex_cli_only` engine fingerprint gate); on the responses wire also `OpenAI-Beta: responses=experimental` |
 | `claude-code` | `claude-cli/2.1.310 (external, cli)` | `X-App: cli`; on anthropic also `anthropic-version`, `anthropic-beta: claude-code-20250219,…`, full `X-Stainless-*` set |
-| `pi` | anthropic endpoints: `claude-cli/2.1.75`; responses endpoints: `pi (win32 10.0.19045; x64)` | exactly what the real pi client sends, picked per protocol |
+| `pi` | anthropic endpoints: `claude-cli/2.1.322`; responses/default endpoints: `pi/1.7.0 (win32; node/v22.14.0; x64)` | matches real `@earendil-works/pi-ai` stealth/native behavior per protocol (`piClaude` synced from `anthropic-messages.js`) |
 | `zcode` | `ZCode/3.16.3 ai-sdk/anthropic/3.0.81` | `HTTP-Referer`, `X-ZCode-*`, `X-Device-Mid` (read from the local device id when present) |
-| `opencode` | `Bun/1.4.4` (the real client sends no custom UA — the Bun runtime default rides along) | `HTTP-Referer: https://opencode.ai/`, `X-Title`/`X-Source: opencode`, session trio `x-opencode-session-id`/`X-Session-Id`/`x-session-affinity` (`ses_<64hex>`, persisted across host reloads) |
+| `opencode` | `opencode/latest/2.4.2/cli` | `HTTP-Referer: https://opencode.ai/`, `X-Title`/`X-Source: opencode`, v2 session headers `x-opencode-session-id`/`x-opencode-session`/`x-opencode-client`/`X-Session-Id`/`x-session-affinity` (`ses_<64hex>`, persisted across host reloads) |
 | `antigravity` | `antigravity/hub/2.26.0 (aidev_client; os_type=windows; arch=amd64)` | none (the real Hub sends only its UA); `; cl=…` only for known builds |
-| `off` | no rewrite | magpie's default behavior |
+| `off` | no rewrite | stops rewriting UA/headers/metadata and restores Magpie defaults; requests still traverse the plugin and `schema.middleware.mjs` unless disabled in Magpie plugin settings |
 
 ## Configuration `~/.config/magpie/ua-switcher.json`
 

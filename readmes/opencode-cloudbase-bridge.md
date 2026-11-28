@@ -8,6 +8,20 @@ Use Tencent CloudBase models in [Magpie](https://usemagpie.ai) as an OpenAI-comp
 
 > Community project: not affiliated with Magpie or Tencent Cloud, and not reviewed or curated by Magpie.
 
+## Optional thinking controls (0.2.12+)
+
+**Just chatting? No change is required**, even on plugin 0.2.4. When the chat request has no thinking fields, the bridge adds none. Disabling reasoning levels in Magpie leaves the choice to the model; it does **not** turn thinking off (`hy4-flash` defaults to high).
+
+To control thinking from DSH, update the plugin on the Magpie instance DSH uses, deploy the [unified `aiProxy` ZIP](https://github.com/DaBinBinah/cloudbase-bridge/releases/download/v0.2.12/aiProxy-unified-with-deps.zip), check that `{"action":"ping"}` returns `reasoningLevels`, and refresh models in Magpie. A preview function already advertising these levels does not need redeployment. Enable the levels users may choose in Magpie, then select one per conversation in DSH.
+
+| Model | Available choices |
+|---|---|
+| `hy4-flash`, `hy4`, `hy4-preview` | Off, High |
+| `hy3` | Off, Low, High (upstream may use High with tools) |
+| `deepseek-v4.1-flash`, `deepseek-v4.1-flash-1017` | Off, Low, High, Max |
+
+DSH **Off** (`none` on the wire) explicitly disables thinking; **High** (`high`) requests it. The final answer can be the same. Some custom DSH profiles also send `none` for **Default**; disable level forwarding in Magpie if you need the upstream default. Image generation receives no reasoning controls.
+
 ![Growth-plan gift quota in the CloudBase console: 1B tokens + 100K image generations](docs/images/growth-plan-quota.png)
 
 ## Why a cloud function in the middle?
@@ -37,13 +51,13 @@ Availability and billing depend on the environment. Under the [official source r
 
 **DSH image generation (off by default, plugin 0.2.9+):** Chat-only users, including those on 0.2.4, don't need to change anything.
 
-1. **New installations need just one function.** Upload the [unified chat + image ZIP](https://github.com/DaBinBinah/cloudbase-bridge/releases/download/aiproxy-2026.11.27/aiProxy-unified-with-deps.zip) to the `aiProxy` event function (Node.js 20, `index.main`, disable automatic dependency installation; allow 600 seconds for images). Test with `{"action":"checkImage","prompt":"A banner, 2K, 5:2"}`: expect `requestedSize: "2560x1024"` and `modelCalled: false`. Without a ratio or resolution, images default to `1024x1024`.
+1. **New installations need just one function.** Upload the [unified chat + image ZIP](https://github.com/DaBinBinah/cloudbase-bridge/releases/download/v0.2.12/aiProxy-unified-with-deps.zip) to the `aiProxy` event function (Node.js 20, `index.main`, disable automatic dependency installation; allow 600 seconds for images). Test with `{"action":"checkImage","prompt":"A banner, 2K, 5:2"}`: expect `requestedSize: "2560x1024"` and `modelCalled: false`. Without a ratio or resolution, images default to `1024x1024`.
 2. Enable **Image generation** in the Magpie plugin options. In DSH select `cloudbase/hy-image-v3.5-preview` and send a text prompt.
 3. From 0.2.10, new DSH web replies show the image inline with an **打开原图** (open original) link. If you still get a bare URL, enable **Always show image previews** in Magpie and save. This requests Markdown for all image clients using that configuration, even without a DSH identifier. It doesn't change chat or previous replies. Leave it off for non-DSH clients expecting a bare HTTPS URL.
 
 **No migration required.** After a successful ping, 0.2.11 uses the configured chat function if it advertises image support, otherwise the separate `generateImage` function. A failed probe generates nothing; a submitted image request is never retried against another function. Keep `generateImage` while any 0.2.9/0.2.10 clients still use it. The Magpie option is not an access control: callers authorized to invoke the unified function directly can also generate images.
 
-**2K / 4K:** Use the function ZIP above; the Magpie plugin stays at 0.2.11. Add `2K` or `4K` as a separate comma-delimited option, e.g. `A cat, 4K, 5:2`. Square outputs use 2048 or 4096 pixels per side. For non-square images the long side is 2560 or 3840 pixels; the short side follows the requested ratio, rounded to the nearest pixel. Without a tier, existing sizes are unchanged. Use `checkImage` to inspect the exact request before generating.
+**2K / 4K:** Use the function ZIP above; 0.2.11 users do not need a plugin update for image sizes. Add `2K` or `4K` as a separate comma-delimited option, e.g. `A cat, 4K, 5:2`. Square outputs use 2048 or 4096 pixels per side. For non-square images the long side is 2560 or 3840 pixels; the short side follows the requested ratio, rounded to the nearest pixel. Without a tier, existing sizes are unchanged. Use `checkImage` to inspect the exact request before generating.
 
 **Optional image labeling:** Set `IMAGE_FOOTNOTE_MODE` on the function that actually generates images; `aiProxy` does not inherit settings from `generateImage`. `empty` (default) sends an empty string, `space` sends one space, and `omit` leaves out the field. Check `footnoteMode` without calling the model: `{"action":"checkImage"}` on the unified function, `{"action":"check"}` on the standalone one. [CloudBase documents custom labels](https://docs.cloudbase.net/ai/image-model/custom-watermark), not a guaranteed opt-out. Follow the [content-labeling terms](https://cloud.tencent.com/document/product/301/97822) when distributing images.
 
@@ -59,7 +73,7 @@ Download the image before the link expires. Each prompt requests a new image; hi
 
 ## Deploy aiProxy
 
-For chat **and** image generation, use the [unified ZIP](https://github.com/DaBinBinah/cloudbase-bridge/releases/download/aiproxy-2026.11.27/aiProxy-unified-with-deps.zip) above. **The following CLI deploys only chat and image input; do not run it over the unified ZIP.** [Chat function guide](cloudfunctions/aiProxy/README.md):
+For chat **and** image generation, use the [unified ZIP](https://github.com/DaBinBinah/cloudbase-bridge/releases/download/v0.2.12/aiProxy-unified-with-deps.zip) above. **The following CLI deploys only chat and image input; do not run it over the unified ZIP.** [Chat function guide](cloudfunctions/aiProxy/README.md):
 
 ```bash
 cp cloudbaserc.example.json cloudbaserc.json   # set envId to yours
